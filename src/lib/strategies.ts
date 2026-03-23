@@ -11,6 +11,10 @@ export interface Strategy {
   tvl: string;
   minDeposit: number;
   token: string;
+  /** Target contract address for deposits (used by OKX tx API) */
+  contractAddress?: string;
+  /** Encoded calldata for the deposit function (used by OKX tx API) */
+  depositCalldata?: string;
 }
 
 export const STRATEGIES: Strategy[] = [

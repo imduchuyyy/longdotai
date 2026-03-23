@@ -94,8 +94,8 @@ export default function LandingPage() {
               <span className="doodle-underline">zero stress</span>
             </h1>
             <p className="mt-5 max-w-lg text-lg leading-relaxed text-muted-foreground">
-              Connect your wallet, tell our AI agent your goals, and let it find
-              the best DeFi yield strategies on X Layer for you.
+              Sign in with your email, tell our AI agent your goals, and let it
+              find the best DeFi yield strategies on X Layer for you.
             </p>
             <div className="mt-8 flex items-center gap-4">
               <Link href="/dashboard">
@@ -219,8 +219,8 @@ export default function LandingPage() {
                 Ready to earn smarter yields?
               </h2>
               <p className="text-muted-foreground mb-8 max-w-sm">
-                Connect your wallet and start chatting with your AI yield agent
-                in seconds.
+                Sign in with your email and start chatting with your AI yield
+                agent in seconds.
               </p>
               <Link href="/dashboard">
                 <Button size="lg" className="gap-2 text-base px-8">

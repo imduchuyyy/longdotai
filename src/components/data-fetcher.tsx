@@ -1,36 +1,24 @@
 "use client";
 
 import { useEffect } from "react";
-import { useAccount } from "wagmi";
 import { useApp } from "@/providers/app-provider";
 
+/**
+ * DataFetcher — loads user data from the API when authenticated.
+ * Replaces the old wagmi-based version. Now reads identity from the
+ * AppProvider session (which comes from localStorage).
+ */
 export function DataFetcher() {
-  const { setAgentAddress, setConversations, setFullPersona } = useApp();
-  const { address } = useAccount();
+  const { isAuthenticated, email, setConversations, setFullPersona } = useApp();
 
   useEffect(() => {
-    if (!address) {
-      setAgentAddress(null);
+    if (!isAuthenticated || !email) {
       setConversations([]);
       return;
     }
 
-    // Fetch agent wallet
-    fetch("/api/agent-wallet", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userAddress: address }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.agentAddress) {
-          setAgentAddress(data.agentAddress);
-        }
-      })
-      .catch(console.error);
-
-    // Fetch conversations
-    fetch(`/api/conversations?userAddress=${address}`)
+    // Fetch conversations (keyed by email now instead of address)
+    fetch(`/api/conversations?userAddress=${encodeURIComponent(email)}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.conversations) {
@@ -40,15 +28,15 @@ export function DataFetcher() {
                 id: c.id,
                 title: c.title,
                 updatedAt: c.updatedAt,
-              })
-            )
+              }),
+            ),
           );
         }
       })
       .catch(console.error);
 
     // Fetch persona settings
-    fetch(`/api/persona?userAddress=${address}`)
+    fetch(`/api/persona?userAddress=${encodeURIComponent(email)}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.persona) {
@@ -56,7 +44,7 @@ export function DataFetcher() {
         }
       })
       .catch(console.error);
-  }, [address, setAgentAddress, setConversations, setFullPersona]);
+  }, [isAuthenticated, email, setConversations, setFullPersona]);
 
   return null;
 }

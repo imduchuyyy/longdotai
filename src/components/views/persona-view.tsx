@@ -4,7 +4,6 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Save, RotateCcw, Loader2, Check } from "lucide-react";
 import { useApp } from "@/providers/app-provider";
-import { useAccount } from "wagmi";
 import {
   Card,
   CardContent,
@@ -31,8 +30,7 @@ function getRiskInfo(level: number) {
 }
 
 export function PersonaView() {
-  const { persona, setPersona } = useApp();
-  const { address } = useAccount();
+  const { persona, setPersona, email, isAuthenticated } = useApp();
   const riskInfo = getRiskInfo(persona.riskLevel);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -49,14 +47,14 @@ export function PersonaView() {
   }
 
   async function handleSave() {
-    if (!address) return;
+    if (!email) return;
     setSaving(true);
     setSaved(false);
     try {
       await fetch("/api/persona", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userAddress: address, persona }),
+        body: JSON.stringify({ userAddress: email, persona }),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -75,7 +73,9 @@ export function PersonaView() {
         className="mb-8 flex items-center justify-between"
       >
         <div>
-          <h1 className="text-2xl font-bold text-[#1F2937]">Persona Settings</h1>
+          <h1 className="text-2xl font-bold text-[#1F2937]">
+            Persona Settings
+          </h1>
           <p className="mt-1 text-muted-foreground text-sm">
             Configure your AI agent&apos;s behavior and risk tolerance
           </p>
@@ -118,10 +118,10 @@ export function PersonaView() {
                 className="w-full"
               />
               <div className="flex justify-between text-xs text-muted-foreground/70">
-                <span>🛡️ Safe Bet</span>
-                <span>🧭 Cautious</span>
-                <span>⚖️ Balanced</span>
-                <span>🦍 Ape In</span>
+                <span>Safe Bet</span>
+                <span>Cautious</span>
+                <span>Balanced</span>
+                <span>Ape In</span>
               </div>
             </CardContent>
           </Card>
@@ -184,7 +184,9 @@ export function PersonaView() {
               <div className="h-px bg-border/40" />
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-semibold text-[#1F2937]">Bridge</p>
+                  <p className="text-sm font-semibold text-[#1F2937]">
+                    Bridge
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     Allow cross-chain bridging
                   </p>
@@ -199,7 +201,9 @@ export function PersonaView() {
               <div className="h-px bg-border/40" />
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-semibold text-[#1F2937]">Deposit</p>
+                  <p className="text-sm font-semibold text-[#1F2937]">
+                    Deposit
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     Allow deposits into yield vaults
                   </p>
@@ -225,7 +229,7 @@ export function PersonaView() {
           <Button
             onClick={handleSave}
             className="flex-1 gap-2"
-            disabled={saving || !address}
+            disabled={saving || !isAuthenticated}
           >
             {saving ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -242,9 +246,9 @@ export function PersonaView() {
           </Button>
         </motion.div>
 
-        {!address && (
+        {!isAuthenticated && (
           <p className="text-center text-xs text-muted-foreground/60 mt-2">
-            Connect your wallet to save persona settings
+            Sign in with your email to save persona settings
           </p>
         )}
       </div>

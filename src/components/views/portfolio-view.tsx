@@ -7,8 +7,9 @@ import {
   TrendingUp,
   Activity,
   ExternalLink,
+  Wallet,
+  Coins,
 } from "lucide-react";
-import { useAccount } from "wagmi";
 import {
   Card,
   CardContent,
@@ -30,21 +31,35 @@ interface ActiveStrategyData {
   createdAt: string;
 }
 
-export function PortfolioView() {
-  const { address } = useAccount();
-  const { agentAddress, persona } = useApp();
-  const [activeStrategies, setActiveStrategies] = useState<ActiveStrategyData[]>([]);
-  const [loading, setLoading] = useState(true);
+interface TokenBalanceData {
+  chainIndex: string;
+  tokenAddress: string;
+  symbol: string;
+  balance: string;
+  tokenPrice: string;
+  tokenType: string;
+  isRiskToken: boolean;
+}
 
+export function PortfolioView() {
+  const { email, userAddress, session, persona } = useApp();
+  const [activeStrategies, setActiveStrategies] = useState<
+    ActiveStrategyData[]
+  >([]);
+  const [balances, setBalances] = useState<TokenBalanceData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [balancesLoading, setBalancesLoading] = useState(true);
+
+  // Fetch active strategies
   useEffect(() => {
-    if (!address) {
+    if (!email) {
       setActiveStrategies([]);
       setLoading(false);
       return;
     }
 
     setLoading(true);
-    fetch(`/api/strategies?userAddress=${address}`)
+    fetch(`/api/strategies?userAddress=${encodeURIComponent(email)}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.strategies) {
@@ -53,24 +68,56 @@ export function PortfolioView() {
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [address]);
+  }, [email]);
 
-  const displayName = address
-    ? `${address.slice(0, 6)}...${address.slice(-4)}.xlayer`
-    : "Not Connected";
+  // Fetch real token balances from OKX
+  useEffect(() => {
+    if (!session?.accessToken || !session?.accountId) {
+      setBalances([]);
+      setBalancesLoading(false);
+      return;
+    }
+
+    setBalancesLoading(true);
+    fetch("/api/balances", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accessToken: session.accessToken,
+        accountId: session.accountId,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.balances) {
+          setBalances(data.balances);
+        }
+      })
+      .catch(console.error)
+      .finally(() => setBalancesLoading(false));
+  }, [session]);
+
+  const displayName = email ?? "Not Signed In";
 
   const totalDeposit = activeStrategies.reduce(
     (sum, s) => sum + s.depositAmount,
-    0
+    0,
   );
   const totalValue = activeStrategies.reduce(
     (sum, s) => sum + s.currentValue,
-    0
+    0,
   );
   const performance =
     totalDeposit > 0
       ? (((totalValue - totalDeposit) / totalDeposit) * 100).toFixed(2)
       : "0.00";
+
+  // Compute total wallet balance from OKX token balances
+  const totalWalletUsd = balances.reduce((sum, b) => {
+    const bal = parseFloat(b.balance) || 0;
+    const price = parseFloat(b.tokenPrice) || 0;
+    return sum + bal * price;
+  }, 0);
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-6">
@@ -83,17 +130,19 @@ export function PortfolioView() {
         <Card className="border-0 bg-gradient-to-br from-pastel-lavender/40 via-white to-pastel-blue/30 shadow-none">
           <CardContent className="flex items-center justify-between py-6">
             <div>
-              <h1 className="text-2xl font-bold text-[#1F2937]">{displayName}</h1>
-              {agentAddress && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Agent: {agentAddress.slice(0, 10)}...{agentAddress.slice(-8)}
+              <h1 className="text-2xl font-bold text-[#1F2937]">
+                {displayName}
+              </h1>
+              {userAddress && (
+                <p className="mt-1 text-xs text-muted-foreground font-mono">
+                  {userAddress.slice(0, 10)}...{userAddress.slice(-8)}
+                  <span className="ml-2 inline-flex items-center gap-1 text-[#059669]">
+                    <Wallet className="h-3 w-3" /> OKX Wallet
+                  </span>
                 </p>
               )}
             </div>
-            <Badge
-              variant="lavender"
-              className="text-xs font-medium"
-            >
+            <Badge variant="lavender" className="text-xs font-medium">
               {getRiskLabel(persona.riskLevel)}
             </Badge>
           </CardContent>
@@ -113,7 +162,9 @@ export function PortfolioView() {
               <DollarSign className="h-5 w-5 text-[#3730A3]" />
             </div>
             <div>
-              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Total Deposit</p>
+              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">
+                Total Deposit
+              </p>
               <p className="text-xl font-bold text-[#1F2937]">
                 ${totalDeposit.toLocaleString()}
               </p>
@@ -127,8 +178,12 @@ export function PortfolioView() {
               <TrendingUp className="h-5 w-5 text-[#059669]" />
             </div>
             <div>
-              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Performance</p>
-              <p className="text-xl font-bold text-[#059669]">+{performance}%</p>
+              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">
+                Performance
+              </p>
+              <p className="text-xl font-bold text-[#059669]">
+                +{performance}%
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -139,7 +194,9 @@ export function PortfolioView() {
               <Activity className="h-5 w-5 text-[#5B21B6]" />
             </div>
             <div>
-              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">Txs Made</p>
+              <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">
+                Txs Made
+              </p>
               <p className="text-xl font-bold text-[#1F2937]">
                 {activeStrategies.length}
               </p>
@@ -147,6 +204,106 @@ export function PortfolioView() {
           </CardContent>
         </Card>
       </motion.div>
+
+      {/* Wallet Balances (from OKX) */}
+      {session && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.2 }}
+          className="mb-8"
+        >
+          <h2 className="mb-4 text-xs font-semibold text-muted-foreground/60 uppercase tracking-widest px-1">
+            Wallet Balances
+          </h2>
+
+          {balancesLoading ? (
+            <Card>
+              <CardContent className="space-y-3 pt-6">
+                <div className="h-5 w-32 animate-pulse rounded-xl bg-[#F1F5F9]" />
+                <div className="h-4 w-24 animate-pulse rounded-xl bg-[#F1F5F9]" />
+              </CardContent>
+            </Card>
+          ) : balances.length === 0 ? (
+            <Card className="shadow-none">
+              <CardContent className="py-8 text-center">
+                <Coins className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
+                <p className="text-sm text-muted-foreground">
+                  No tokens found in wallet
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-sm text-muted-foreground">
+                    Total Value
+                  </span>
+                  <span className="text-lg font-bold text-[#1F2937]">
+                    $
+                    {totalWalletUsd.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {balances
+                    .filter((b) => !b.isRiskToken)
+                    .map((balance) => {
+                      const bal = parseFloat(balance.balance) || 0;
+                      const price = parseFloat(balance.tokenPrice) || 0;
+                      const usdValue = bal * price;
+                      return (
+                        <div
+                          key={`${balance.chainIndex}-${balance.tokenAddress}`}
+                          className="flex items-center justify-between py-2 border-b border-border/40 last:border-0"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-pastel-peach">
+                              <span className="text-xs font-bold text-[#92400E]">
+                                {balance.symbol.slice(0, 2)}
+                              </span>
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-[#1F2937]">
+                                {balance.symbol}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {bal.toLocaleString(undefined, {
+                                  maximumFractionDigits: 6,
+                                })}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-semibold text-[#1F2937]">
+                              $
+                              {usdValue.toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </p>
+                            {price > 0 && (
+                              <p className="text-xs text-muted-foreground">
+                                $
+                                {price.toLocaleString(undefined, {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 4,
+                                })}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </motion.div>
+      )}
 
       {/* Current Strategies */}
       <motion.div
@@ -173,7 +330,11 @@ export function PortfolioView() {
         ) : activeStrategies.length === 0 ? (
           <Card className="shadow-none">
             <CardContent className="py-16 text-center">
-              <DoodleMascot size={72} mood="thinking" className="mx-auto mb-4" />
+              <DoodleMascot
+                size={72}
+                mood="thinking"
+                className="mx-auto mb-4"
+              />
               <p className="text-muted-foreground font-medium">
                 No active strategies yet
               </p>
@@ -186,7 +347,7 @@ export function PortfolioView() {
           <div className="grid gap-5 md:grid-cols-2">
             {activeStrategies.map((active, i) => {
               const strategy = STRATEGIES.find(
-                (s) => s.id === active.strategyId
+                (s) => s.id === active.strategyId,
               );
               if (!strategy) return null;
               const pnl = active.currentValue - active.depositAmount;
@@ -230,7 +391,9 @@ export function PortfolioView() {
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">PnL</span>
-                        <span className={`font-semibold ${pnl >= 0 ? "text-[#059669]" : "text-destructive"}`}>
+                        <span
+                          className={`font-semibold ${pnl >= 0 ? "text-[#059669]" : "text-destructive"}`}
+                        >
                           {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} ({pnlPct}%)
                         </span>
                       </div>
@@ -241,7 +404,7 @@ export function PortfolioView() {
                         onClick={() =>
                           window.open(
                             `https://www.okx.com/explorer/xlayer/tx/${active.txHash}`,
-                            "_blank"
+                            "_blank",
                           )
                         }
                       >

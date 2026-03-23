@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Inter, Space_Mono } from "next/font/google";
-import { Web3Provider } from "@/providers/web3-provider";
 import { AppProvider } from "@/providers/app-provider";
 import "./globals.css";
 
@@ -18,7 +17,7 @@ const spaceMono = Space_Mono({
 export const metadata: Metadata = {
   title: "Long.AI - X Layer AI Yield Agent",
   description:
-    "AI-powered DeFi yield agent on X Layer chain. Connect your wallet and let AI find the best yield strategies for you.",
+    "AI-powered DeFi yield agent on X Layer chain. Sign in with your email and let AI find the best yield strategies for you.",
 };
 
 export default function RootLayout({
@@ -32,9 +31,7 @@ export default function RootLayout({
       className={`${inter.variable} ${spaceMono.variable} h-full antialiased`}
     >
       <body className="h-full">
-        <AppProvider>
-          <Web3Provider>{children}</Web3Provider>
-        </AppProvider>
+        <AppProvider>{children}</AppProvider>
       </body>
     </html>
   );

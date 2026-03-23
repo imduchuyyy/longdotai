@@ -4,7 +4,6 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { Search, Sparkles, ArrowRight, TrendingUp, Wallet, Layers } from "lucide-react";
 import { useState } from "react";
-import { useAccount } from "wagmi";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,14 +13,11 @@ import { useApp } from "@/providers/app-provider";
 import { STRATEGIES, type Strategy } from "@/lib/strategies";
 
 export function HomeContent() {
-  const { address } = useAccount();
-  const { persona, setChatActive, setInitialChatMessage, setActiveConversationId } = useApp();
+  const { email, persona, setChatActive, setInitialChatMessage, setActiveConversationId } = useApp();
   const [searchQuery, setSearchQuery] = useState("");
 
   const greeting = getGreeting();
-  const displayName = address
-    ? `${address.slice(0, 6)}...${address.slice(-4)}`
-    : "Anon";
+  const displayName = email ?? "Anon";
 
   function openChat(message?: string) {
     if (message) {

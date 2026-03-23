@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   ExternalLink,
   ArrowLeft,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -18,18 +19,29 @@ import { DoodleMascot, MascotIcon } from "@/components/doodle-mascot";
 import { useApp } from "@/providers/app-provider";
 import { STRATEGIES, type Strategy } from "@/lib/strategies";
 import { cn } from "@/lib/utils";
-import { useAccount } from "wagmi";
 import type { UIMessage } from "ai";
 
 type TxState =
   | { status: "idle" }
   | { status: "confirming"; strategy: Strategy }
   | { status: "executing"; strategy: Strategy }
-  | { status: "completed"; strategy: Strategy; txHash: string };
+  | { status: "completed"; strategy: Strategy; txHash: string }
+  | { status: "error"; strategy: Strategy; error: string };
 
 export function ChatView() {
-  const { persona, activeConversationId, setActiveConversationId, addConversation, updateConversationTitle, initialChatMessage, setInitialChatMessage, setChatActive } = useApp();
-  const { address } = useAccount();
+  const {
+    persona,
+    activeConversationId,
+    setActiveConversationId,
+    addConversation,
+    updateConversationTitle,
+    initialChatMessage,
+    setInitialChatMessage,
+    setChatActive,
+    email,
+    userAddress,
+    session,
+  } = useApp();
 
   const transport = useMemo(
     () =>
@@ -37,7 +49,7 @@ export function ChatView() {
         api: "/api/chat",
         body: { persona },
       }),
-    [persona]
+    [persona],
   );
 
   const { messages, sendMessage, status, setMessages } = useChat({ transport });
@@ -92,12 +104,17 @@ export function ChatView() {
       .then((data) => {
         if (data.messages && data.messages.length > 0) {
           const uiMessages: UIMessage[] = data.messages.map(
-            (m: { id: string; role: string; content: string; createdAt: string }) => ({
+            (m: {
+              id: string;
+              role: string;
+              content: string;
+              createdAt: string;
+            }) => ({
               id: m.id,
               role: m.role as "user" | "assistant",
               parts: [{ type: "text" as const, text: m.content }],
               createdAt: new Date(m.createdAt),
-            })
+            }),
           );
           setMessages(uiMessages);
         } else {
@@ -128,12 +145,12 @@ export function ChatView() {
     (async () => {
       let convoId = conversationIdRef.current;
 
-      if (!convoId && address) {
+      if (!convoId && email) {
         try {
           const res = await fetch("/api/conversations", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userAddress: address }),
+            body: JSON.stringify({ userAddress: email }),
           });
           const data = await res.json();
           convoId = data.conversation.id;
@@ -154,7 +171,9 @@ export function ChatView() {
 
       for (const msg of newMessages) {
         const content = msg.parts
-          .filter((p): p is { type: "text"; text: string } => p.type === "text")
+          .filter(
+            (p): p is { type: "text"; text: string } => p.type === "text",
+          )
           .map((p) => p.text)
           .join("");
 
@@ -168,7 +187,8 @@ export function ChatView() {
           });
 
           if (msg.role === "user" && messages.indexOf(msg) === 0) {
-            const title = content.length > 50 ? content.slice(0, 47) + "..." : content;
+            const title =
+              content.length > 50 ? content.slice(0, 47) + "..." : content;
             updateConversationTitle(convoId, title);
           }
         } catch (err) {
@@ -176,7 +196,14 @@ export function ChatView() {
         }
       }
     })();
-  }, [status, messages, address, setActiveConversationId, addConversation, updateConversationTitle]);
+  }, [
+    status,
+    messages,
+    email,
+    setActiveConversationId,
+    addConversation,
+    updateConversationTitle,
+  ]);
 
   useEffect(() => {
     lastPersistedCountRef.current = 0;
@@ -198,29 +225,85 @@ export function ChatView() {
     const strategy = txState.strategy;
     setTxState({ status: "executing", strategy });
 
-    setTimeout(async () => {
-      const mockHash = `0x${Array.from({ length: 64 }, () =>
-        Math.floor(Math.random() * 16).toString(16)
-      ).join("")}`;
-      setTxState({ status: "completed", strategy, txHash: mockHash });
+    (async () => {
+      try {
+        // Prepare transaction via API (passes accessToken from session)
+        const prepRes = await fetch("/api/transactions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "prepare",
+            accessToken: session?.accessToken,
+            accountId: session?.accountId,
+            sessionCert: session?.sessionCert,
+            toAddress:
+              strategy.contractAddress ??
+              "0x0000000000000000000000000000000000000000",
+            value: String(strategy.minDeposit),
+            data: strategy.depositCalldata,
+          }),
+        });
+        const prepData = await prepRes.json();
 
-      if (address) {
-        try {
-          await fetch("/api/strategies", {
+        let txHash: string;
+
+        if (prepData.unsignedTxHash) {
+          // Real OKX flow — broadcast
+          const broadcastRes = await fetch("/api/transactions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              userAddress: address,
-              strategyId: strategy.id,
-              depositAmount: strategy.minDeposit,
-              txHash: mockHash,
+              action: "broadcast",
+              accessToken: session?.accessToken,
+              accountId: session?.accountId,
+              sessionCert: session?.sessionCert,
+              chainIndex: "196",
+              unsignedTxHash: prepData.unsignedTxHash,
+              signedTx: prepData.unsignedTx, // TEE-signed
             }),
           });
-        } catch (err) {
-          console.error("Failed to persist strategy:", err);
+          const broadcastData = await broadcastRes.json();
+
+          if (broadcastData.error) {
+            throw new Error(broadcastData.error);
+          }
+          txHash = broadcastData.txHash;
+        } else {
+          // Fallback: mock transaction when OKX is not configured
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          txHash = `0x${Array.from({ length: 64 }, () =>
+            Math.floor(Math.random() * 16).toString(16),
+          ).join("")}`;
         }
+
+        setTxState({ status: "completed", strategy, txHash });
+
+        // Persist the strategy activation
+        if (email) {
+          try {
+            await fetch("/api/strategies", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                userAddress: email,
+                strategyId: strategy.id,
+                depositAmount: strategy.minDeposit,
+                txHash,
+              }),
+            });
+          } catch (err) {
+            console.error("Failed to persist strategy:", err);
+          }
+        }
+      } catch (err) {
+        console.error("Transaction failed:", err);
+        setTxState({
+          status: "error",
+          strategy,
+          error: err instanceof Error ? err.message : "Transaction failed",
+        });
       }
-    }, 3000);
+    })();
   }
 
   function handleDismissTx() {
@@ -228,6 +311,11 @@ export function ChatView() {
   }
 
   const recommendedStrategies = getStrategiesForRisk(persona.riskLevel);
+
+  // User avatar initials from email
+  const avatarInitials = email
+    ? email.slice(0, 2).toUpperCase()
+    : "U";
 
   return (
     <div className="flex h-full flex-col">
@@ -261,9 +349,6 @@ export function ChatView() {
                 Tell me about your yield goals and I&apos;ll find the best
                 strategies on X Layer for you.
               </p>
-
-              {/* Recommended Vaults */}
-
             </motion.div>
           )}
 
@@ -275,7 +360,7 @@ export function ChatView() {
               transition={{ duration: 0.25 }}
               className={cn(
                 "flex gap-3",
-                message.role === "user" ? "justify-end" : "justify-start"
+                message.role === "user" ? "justify-end" : "justify-start",
               )}
             >
               {message.role === "assistant" && (
@@ -288,7 +373,7 @@ export function ChatView() {
                   "max-w-[75%] rounded-3xl px-5 py-3 text-sm leading-relaxed",
                   message.role === "user"
                     ? "bg-primary text-white rounded-br-lg"
-                    : "bg-white border border-border/60 text-[#1F2937] rounded-bl-lg shadow-[0_1px_3px_rgba(0,0,0,0.04)]"
+                    : "bg-white border border-border/60 text-[#1F2937] rounded-bl-lg shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
                 )}
               >
                 {message.parts.map((part, i) =>
@@ -296,13 +381,13 @@ export function ChatView() {
                     <p key={i} className="whitespace-pre-wrap">
                       {part.text}
                     </p>
-                  ) : null
+                  ) : null,
                 )}
               </div>
               {message.role === "user" && (
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-blue">
                   <span className="text-xs font-bold text-[#3730A3]">
-                    {address ? address.slice(2, 4).toUpperCase() : "U"}
+                    {avatarInitials}
                   </span>
                 </div>
               )}
@@ -330,27 +415,29 @@ export function ChatView() {
           )}
 
           {/* Strategy Cards */}
-          {messages.length > 0 && messages.length % 4 === 0 && txState.status === "idle" && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="space-y-4"
-            >
-              <p className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-widest px-1">
-                My recommendations
-              </p>
-              <div className="grid gap-4">
-                {recommendedStrategies.map((strategy, i) => (
-                  <VaultCard
-                    key={strategy.id}
-                    strategy={strategy}
-                    index={i}
-                    onDeposit={handleDeposit}
-                  />
-                ))}
-              </div>
-            </motion.div>
-          )}
+          {messages.length > 0 &&
+            messages.length % 4 === 0 &&
+            txState.status === "idle" && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-4"
+              >
+                <p className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-widest px-1">
+                  My recommendations
+                </p>
+                <div className="grid gap-4">
+                  {recommendedStrategies.map((strategy, i) => (
+                    <VaultCard
+                      key={strategy.id}
+                      strategy={strategy}
+                      index={i}
+                      onDeposit={handleDeposit}
+                    />
+                  ))}
+                </div>
+              </motion.div>
+            )}
         </div>
       </ScrollArea>
 
@@ -372,7 +459,8 @@ export function ChatView() {
                         Deposit into {txState.strategy.name}?
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Min: {txState.strategy.minDeposit} {txState.strategy.token} | APY: {txState.strategy.apy}%
+                        Min: {txState.strategy.minDeposit}{" "}
+                        {txState.strategy.token} | APY: {txState.strategy.apy}%
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -383,7 +471,11 @@ export function ChatView() {
                       >
                         Cancel
                       </Button>
-                      <Button size="sm" variant="mint" onClick={handleConfirmDeposit}>
+                      <Button
+                        size="sm"
+                        variant="mint"
+                        onClick={handleConfirmDeposit}
+                      >
                         Confirm
                       </Button>
                     </div>
@@ -429,7 +521,7 @@ export function ChatView() {
                         onClick={() =>
                           window.open(
                             `https://www.okx.com/explorer/xlayer/tx/${txState.txHash}`,
-                            "_blank"
+                            "_blank",
                           )
                         }
                       >
@@ -442,6 +534,44 @@ export function ChatView() {
                     </div>
                   </div>
                 )}
+
+                {txState.status === "error" && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50">
+                        <AlertCircle className="h-5 w-5 text-destructive" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-[#1F2937]">
+                          Transaction Failed
+                        </p>
+                        <p className="text-xs text-muted-foreground max-w-xs truncate">
+                          {txState.error}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleDismissTx}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setTxState({
+                            status: "confirming",
+                            strategy: txState.strategy,
+                          });
+                        }}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </motion.div>
@@ -450,10 +580,7 @@ export function ChatView() {
 
       {/* Input Area */}
       <div className="px-8 pb-6 pt-2">
-        <form
-          onSubmit={handleSubmit}
-          className="mx-auto max-w-2xl"
-        >
+        <form onSubmit={handleSubmit} className="mx-auto max-w-2xl">
           <div className="card-playful flex items-center gap-2 px-5 py-2">
             <input
               value={input}
