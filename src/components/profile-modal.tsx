@@ -59,7 +59,7 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-8"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-8"
         >
           {/* Backdrop */}
           <motion.div
@@ -111,20 +111,6 @@ export function ProfileModal({ open, onClose }: ProfileModalProps) {
                       </p>
                       <p className="text-xs font-medium text-[#1F2937] truncate">
                         {email}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 rounded-xl bg-white border border-border/60 px-3 py-2.5">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-pastel-mint">
-                      <Shield className="h-3.5 w-3.5 text-[#065F46]" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">
-                        Account ID
-                      </p>
-                      <p className="text-xs font-mono text-[#1F2937] truncate">
-                        {accountId ?? "—"}
                       </p>
                     </div>
                   </div>
