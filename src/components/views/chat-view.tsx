@@ -389,7 +389,7 @@ export function ChatView() {
                 {/* Assistant avatar */}
                 {m.role === "assistant" && (
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint overflow-hidden">
-                    <Image src="/avatar.png" alt="AI" width={20} height={20} className="rounded-full" />
+                    <Image src="/avatar-chat.png" alt="AI" width={20} height={20} className="rounded-full" />
                   </div>
                 )}
 
