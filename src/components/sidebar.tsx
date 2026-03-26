@@ -12,10 +12,10 @@ import {
   PanelLeftClose,
   PanelLeft,
 } from "lucide-react";
+import Image from "next/image";
 import { useApp } from "@/providers/app-provider";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { MascotIcon } from "@/components/doodle-mascot";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS: { href: string; label: string; icon: typeof Home }[] = [
@@ -110,7 +110,7 @@ export function Sidebar() {
                   onClick={() => handleNavClick("/")}
                   className="flex items-center gap-2.5"
                 >
-                  <MascotIcon size={30} />
+                  <Image src="/avatar.png" alt="Long.AI" width={30} height={30} className="rounded-full" />
                   <span className="text-lg font-bold text-[#1F2937] tracking-tight">
                     Long.AI
                   </span>

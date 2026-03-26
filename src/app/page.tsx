@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
@@ -13,7 +14,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { DoodleMascot, MascotIcon } from "@/components/doodle-mascot";
 
 const FEATURES = [
   {
@@ -22,7 +22,7 @@ const FEATURES = [
     description:
       "Chat with our AI agent to discover yield strategies tailored to your risk profile on X Layer.",
     bg: "bg-pastel-blue",
-    color: "text-[#3730A3]",
+    color: "text-[#166534]",
   },
   {
     icon: Shield,
@@ -62,7 +62,7 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
         <div className="flex items-center gap-2.5">
-          <MascotIcon size={32} />
+          <Image src="/avatar.png" alt="Long.AI" width={32} height={32} className="rounded-full" />
           <span className="text-lg font-bold text-[#1F2937] tracking-tight">
             Long.AI
           </span>
@@ -84,8 +84,8 @@ export default function LandingPage() {
             transition={{ duration: 0.6, ease: "easeOut" }}
           >
             <div className="mb-5 inline-flex items-center gap-2 rounded-full bg-pastel-blue px-4 py-1.5">
-              <Sparkles className="h-3.5 w-3.5 text-[#3730A3]" />
-              <span className="text-xs font-semibold text-[#3730A3]">
+              <Sparkles className="h-3.5 w-3.5 text-[#166534]" />
+              <span className="text-xs font-semibold text-[#166534]">
                 AI Yield Agent on X Layer
               </span>
             </div>
@@ -119,13 +119,13 @@ export default function LandingPage() {
           >
             <div className="relative">
               {/* Decorative blobs */}
-              <div className="absolute -top-8 -left-8 h-48 w-48 rounded-full bg-pastel-blue/50 blur-3xl" />
-              <div className="absolute -bottom-8 -right-8 h-48 w-48 rounded-full bg-pastel-mint/50 blur-3xl" />
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-32 w-32 rounded-full bg-pastel-lavender/40 blur-2xl" />
+              <div className="absolute -top-8 -left-8 h-48 w-48 rounded-full bg-pastel-mint/50 blur-3xl" />
+              <div className="absolute -bottom-8 -right-8 h-48 w-48 rounded-full bg-pastel-yellow/50 blur-3xl" />
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-32 w-32 rounded-full bg-pastel-blue/40 blur-2xl" />
 
-              {/* Mascot */}
+              {/* GIF Mascot */}
               <div className="relative">
-                <DoodleMascot size={280} mood="waving" />
+                <Image src="/Hi.gif" alt="Hi!" width={280} height={280} unoptimized className="drop-shadow-lg" />
               </div>
             </div>
           </motion.div>
@@ -214,7 +214,7 @@ export default function LandingPage() {
         >
           <Card className="border-0 bg-gradient-to-br from-pastel-blue/40 via-white to-pastel-mint/30 shadow-none">
             <CardContent className="flex flex-col items-center py-16 text-center">
-              <DoodleMascot size={80} mood="happy" className="mb-6" />
+              <Image src="/Lacditt.gif" alt="Mascot" width={80} height={80} unoptimized className="mb-6 rounded-2xl" />
               <h2 className="text-2xl font-bold text-[#1F2937] mb-2">
                 Ready to earn smarter yields?
               </h2>
@@ -237,7 +237,7 @@ export default function LandingPage() {
       <footer className="border-t border-border/40 py-8">
         <div className="mx-auto max-w-6xl px-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <MascotIcon size={20} />
+            <Image src="/avatar.png" alt="Long.AI" width={20} height={20} className="rounded-full" />
             <span className="text-sm font-semibold text-[#1F2937]">
               Long.AI
             </span>

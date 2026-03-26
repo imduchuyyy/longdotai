@@ -70,21 +70,21 @@
   --popover: #FFFFFF;
   --popover-foreground: #1F2937;
 
-  /* Primary: soft indigo-blue */
-  --primary: #6366F1;
+  /* Primary: vibrant green */
+  --primary: #22C55E;
   --primary-foreground: #FFFFFF;
 
-  /* Secondary: soft blue wash */
-  --secondary: #E0E7FF;
-  --secondary-foreground: #3730A3;
+  /* Secondary: soft yellow wash */
+  --secondary: #FEF9C3;
+  --secondary-foreground: #854D0E;
 
   /* Muted: subtle grey */
   --muted: #F1F5F9;
   --muted-foreground: #64748B;
 
-  /* Accent: mint green */
-  --accent: #D1FAE5;
-  --accent-foreground: #065F46;
+  /* Accent: light green */
+  --accent: #DCFCE7;
+  --accent-foreground: #166534;
 
   /* Destructive */
   --destructive: #EF4444;
@@ -100,14 +100,14 @@
   /* Borders: ultra-thin grey */
   --border: #E2E8F0;
   --input: #E2E8F0;
-  --ring: #6366F1;
+  --ring: #22C55E;
 
   /* Charts */
-  --chart-1: #6366F1;
+  --chart-1: #22C55E;
   --chart-2: #10B981;
   --chart-3: #F59E0B;
   --chart-4: #EC4899;
-  --chart-5: #8B5CF6;
+  --chart-5: #16A34A;
 
   /* Radius: generous for playful feel */
   --radius: 1.5rem;
@@ -115,15 +115,15 @@
   /* Sidebar: floating white */
   --sidebar: #FFFFFF;
   --sidebar-foreground: #1F2937;
-  --sidebar-primary: #6366F1;
+  --sidebar-primary: #22C55E;
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #E0E7FF;
-  --sidebar-accent-foreground: #3730A3;
+  --sidebar-accent: #DCFCE7;
+  --sidebar-accent-foreground: #166534;
   --sidebar-border: #E2E8F0;
-  --sidebar-ring: #6366F1;
+  --sidebar-ring: #22C55E;
 
   /* Pastel palette for decorative use */
-  --pastel-blue: #E0E7FF;
+  --pastel-blue: #DCFCE7;
   --pastel-mint: #D1FAE5;
   --pastel-lavender: #EDE9FE;
   --pastel-peach: #FEF3C7;
@@ -195,7 +195,7 @@
 .doodle-underline {
   text-decoration: underline;
   text-decoration-style: wavy;
-  text-decoration-color: #6366F1;
+  text-decoration-color: #22C55E;
   text-underline-offset: 4px;
   text-decoration-thickness: 2px;
 }
@@ -265,14 +265,14 @@
 
 /* Links */
 .chat-markdown a {
-  color: #6366F1;
+  color: #22C55E;
   text-decoration: underline;
-  text-decoration-color: #C7D2FE;
+  text-decoration-color: #BBF7D0;
   text-underline-offset: 2px;
   transition: text-decoration-color 0.15s;
 }
 .chat-markdown a:hover {
-  text-decoration-color: #6366F1;
+  text-decoration-color: #22C55E;
 }
 
 /* Unordered lists */
@@ -303,8 +303,8 @@
 
 /* Inline code */
 .chat-markdown code:not(pre code) {
-  background: #EDE9FE;
-  color: #5B21B6;
+  background: #DCFCE7;
+  color: #166534;
   padding: 0.15em 0.4em;
   border-radius: 6px;
   font-size: 0.88em;
@@ -333,8 +333,8 @@
 
 /* Blockquotes */
 .chat-markdown blockquote {
-  border-left: 3px solid #C7D2FE;
-  background: #F5F3FF;
+  border-left: 3px solid #BBF7D0;
+  background: #F0FDF4;
   padding: 0.5em 0.75em;
   margin: 0.5em 0;
   border-radius: 0 8px 8px 0;
@@ -377,7 +377,7 @@
 /* Task lists (GFM) */
 .chat-markdown input[type="checkbox"] {
   margin-right: 0.4em;
-  accent-color: #6366F1;
+  accent-color: #22C55E;
 }
 
 /* Images (if any) */

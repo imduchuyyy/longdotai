@@ -18,6 +18,10 @@ export const metadata: Metadata = {
   title: "Long.AI - X Layer AI Yield Agent",
   description:
     "AI-powered DeFi yield agent on X Layer chain. Sign in with your email and let AI find the best yield strategies for you.",
+  icons: {
+    icon: "/avatar.png",
+    apple: "/avatar.png",
+  },
 };
 
 export default function RootLayout({

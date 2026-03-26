@@ -7,8 +7,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import Image from "next/image";
 import { VaultCard } from "@/components/vault-card";
-import { DoodleMascot } from "@/components/doodle-mascot";
 import { useApp } from "@/providers/app-provider";
 import { STRATEGIES, type Strategy } from "@/lib/strategies";
 
@@ -64,7 +64,7 @@ export function HomeContent() {
               </p>
             </div>
             <div className="hidden md:block">
-              <DoodleMascot size={100} mood="waving" />
+              <Image src="/Hi.gif" alt="Hi!" width={100} height={100} unoptimized className="drop-shadow-md" />
             </div>
           </CardContent>
         </Card>

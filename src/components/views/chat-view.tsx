@@ -17,7 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { DoodleMascot, MascotIcon } from "@/components/doodle-mascot";
+import Image from "next/image";
 import { useApp } from "@/providers/app-provider";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
@@ -357,7 +357,7 @@ export function ChatView() {
           {messageList.length === 0 && (
             <div className="py-12 text-center animate-in fade-in slide-in-from-bottom-2 duration-500">
               <div className="flex justify-center mb-5">
-                <DoodleMascot size={88} mood="happy" />
+                <Image src="/Lacditt.gif" alt="Mascot" width={88} height={88} unoptimized className="drop-shadow-md rounded-2xl" />
               </div>
               <h3 className="text-xl font-bold text-[#1F2937] mb-1">
                 Hey there! I&apos;m your yield buddy
@@ -388,8 +388,8 @@ export function ChatView() {
               >
                 {/* Assistant avatar */}
                 {m.role === "assistant" && (
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
-                    <MascotIcon size={20} />
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint overflow-hidden">
+                    <Image src="/avatar.png" alt="AI" width={20} height={20} className="rounded-full" />
                   </div>
                 )}
 
@@ -533,8 +533,8 @@ export function ChatView() {
             messageList.length > 0 &&
             messageList[messageList.length - 1]?.role !== "assistant" && (
               <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
-                  <MascotIcon size={20} />
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint overflow-hidden">
+                  <Image src="/avatar.png" alt="AI" width={20} height={20} className="rounded-full" />
                 </div>
                 <div className="flex items-center gap-2 rounded-3xl rounded-bl-lg border border-border/60 bg-white px-5 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
                   <div className="flex gap-1.5">
