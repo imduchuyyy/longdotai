@@ -10,6 +10,7 @@ import {
   getNativeBalance,
   getAllowance,
   getPositions,
+  getDetailedPositions,
   getFullRangeTicks,
   calculateAmountsForPool,
   encodeApprove,
@@ -98,10 +99,11 @@ AVAILABLE UNISWAP V3 POOLS ON X LAYER:
 
 YOUR CAPABILITIES (tools available):
 1. get_balances — Check the user's wallet balances on X Layer
-2. swap_token — Swap tokens on Uniswap V3 (e.g. USDT -> WOKB or WOKB -> USDT)
-3. add_liquidity — Add liquidity to a Uniswap V3 pool (mint a new LP position)
-4. remove_liquidity — Remove liquidity from a Uniswap V3 pool (burn LP position)
-5. withdraw_to_address — Send/withdraw tokens to an external wallet address
+2. get_positions — Find all of the user's Uniswap V3 LP positions with detailed info (token amounts, fees, etc.)
+3. swap_token — Swap tokens on Uniswap V3 (e.g. USDT -> WOKB or WOKB -> USDT)
+4. add_liquidity — Add liquidity to a Uniswap V3 pool (mint a new LP position)
+5. remove_liquidity — Remove liquidity from a Uniswap V3 pool (burn LP position)
+6. withdraw_to_address — Send/withdraw tokens to an external wallet address
 
 IMPORTANT BEHAVIORAL RULES:
 
@@ -114,9 +116,13 @@ IMPORTANT BEHAVIORAL RULES:
    d. Once confirmed, execute the steps: swap if needed, approve tokens, then add_liquidity.
    e. IMPORTANT: You MUST get explicit user confirmation before executing any swap or deposit. Say exactly what you'll do and wait for "yes" or confirmation.
 
-3. When the user wants to withdraw/exit a pool position:
-   a. Call remove_liquidity to burn the LP position
-   b. This returns both tokens (USDT + WOKB) to the wallet
+3. When the user wants to withdraw/exit a pool position, or asks about their positions:
+   a. ALWAYS call get_positions first to find all their LP positions with amounts and fees.
+   b. Present the positions clearly: show token pair, token amounts, uncollected fees, and position ID.
+   c. If they have multiple positions, ask which one they want to withdraw from.
+   d. Once confirmed, call remove_liquidity with the specific tokenId.
+   e. After removing liquidity, the tokens (USDT + WOKB) are returned to their wallet.
+   f. If the user wants to convert everything to a single token after withdrawal, offer to swap.
 
 4. For token swaps, use the swap_token tool. Always confirm the amounts with the user first.
 
@@ -270,6 +276,59 @@ ${persona?.systemPrompt ? `\nADDITIONAL USER INSTRUCTIONS:\n${persona.systemProm
               error: true,
               message:
                 err instanceof Error ? err.message : "Balance fetch failed.",
+            };
+          }
+        },
+      }),
+
+      // ================================================================
+      // Tool: get_positions
+      // ================================================================
+      get_positions: tool({
+        description:
+          "Find all Uniswap V3 LP positions owned by the user on X Layer. Returns detailed info for each position: token pair, token amounts, uncollected fees, fee tier, and whether the position is active. ALWAYS call this before removing liquidity so you know which positions exist and their token IDs.",
+        inputSchema: z.object({}),
+        execute: async () => {
+          if (!walletAddress) {
+            return { error: true, message: "Wallet not connected." };
+          }
+
+          try {
+            const positions = await getDetailedPositions(walletAddress);
+
+            if (positions.length === 0) {
+              return {
+                error: false,
+                positions: [],
+                message: "No Uniswap V3 LP positions found for this wallet.",
+              };
+            }
+
+            return {
+              error: false,
+              totalPositions: positions.length,
+              positions: positions.map((p) => ({
+                tokenId: p.tokenId.toString(),
+                pair: `${p.token0Symbol}/${p.token1Symbol}`,
+                feeTier: p.feeTierLabel,
+                isActive: p.isActive,
+                amount0: p.amount0,
+                amount1: p.amount1,
+                token0Symbol: p.token0Symbol,
+                token1Symbol: p.token1Symbol,
+                unclaimedFees0: p.fees0,
+                unclaimedFees1: p.fees1,
+                hasUnclaimedFees: p.hasUnclaimedFees,
+                liquidity: p.liquidity.toString(),
+              })),
+            };
+          } catch (err) {
+            return {
+              error: true,
+              message:
+                err instanceof Error
+                  ? err.message
+                  : "Failed to fetch positions.",
             };
           }
         },

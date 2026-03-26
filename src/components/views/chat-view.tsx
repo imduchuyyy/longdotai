@@ -1,19 +1,9 @@
 "use client";
 
-import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
-import {
-  type FormEvent,
-  useState,
-  useRef,
-  useEffect,
-  useMemo,
-} from "react";
-import { motion } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
 import {
   Send,
   Loader2,
-  CheckCircle2,
   ExternalLink,
   ArrowLeft,
   AlertCircle,
@@ -25,17 +15,110 @@ import {
   Droplets,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
 import { DoodleMascot, MascotIcon } from "@/components/doodle-mascot";
 import { useApp } from "@/providers/app-provider";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { UIMessage } from "ai";
 
-// ---------------------------------------------------------------------------
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+// ==========================================================================
+// Helpers for SDK v6 UIMessage
+// ==========================================================================
+
+/** Extract concatenated text from a UIMessage's parts array */
+function getMessageText(message: any): string {
+  if (message.parts && Array.isArray(message.parts)) {
+    return message.parts
+      .filter((p: any) => p.type === "text")
+      .map((p: any) => p.text || "")
+      .join("");
+  }
+  if (typeof message.content === "string") return message.content;
+  return "";
+}
+
+/** Extract tool invocation parts from a UIMessage */
+function getToolParts(message: any): any[] {
+  if (!message.parts || !Array.isArray(message.parts)) return [];
+  return message.parts.filter(
+    (p: any) =>
+      p.type === "dynamic-tool" ||
+      (typeof p.type === "string" && p.type.startsWith("tool-")),
+  );
+}
+
+/** Get tool name from a part (without "tool-" prefix) */
+function getToolNameRaw(part: any): string {
+  if (part.type === "dynamic-tool") return part.toolName || "unknown";
+  if (typeof part.type === "string" && part.type.startsWith("tool-")) {
+    return part.type.slice(5);
+  }
+  return "unknown";
+}
+
+/** Get full tool key (with "tool-" prefix) for matching */
+function getToolKey(part: any): string {
+  const raw = getToolNameRaw(part);
+  return `tool-${raw}`;
+}
+
+/** Check if a tool part has completed output */
+function hasToolOutput(part: any): boolean {
+  return part.state === "output-available";
+}
+
+/** Check if a tool part has an error */
+function hasToolError(part: any): boolean {
+  return (
+    part.state === "output-error" ||
+    (part.state === "output-available" && part.output?.error === true)
+  );
+}
+
+/** Get error message from a tool part */
+function getToolErrorMessage(part: any): string {
+  if (part.state === "output-error") return part.errorText || "Something went wrong.";
+  if (part.output?.error) return part.output.message || "Something went wrong.";
+  return "Something went wrong.";
+}
+
+/** Format a numeric string nicely */
+function formatNum(val: string): string {
+  const n = parseFloat(val);
+  if (isNaN(n)) return val;
+  if (n === 0) return "0";
+  if (n < 0.0001) return "<0.0001";
+  if (n < 1) return n.toFixed(6);
+  if (n < 1000) return n.toFixed(4);
+  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/** Shorten an address */
+function shortAddr(addr: string): string {
+  if (!addr || addr.length <= 14) return addr || "";
+  return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
+}
+
+// ==========================================================================
+// Tool loading labels
+// ==========================================================================
+
+const TOOL_LABELS: Record<string, string> = {
+  get_balances: "Checking balances...",
+  get_positions: "Finding your LP positions...",
+  swap_token: "Executing swap...",
+  add_liquidity: "Adding liquidity...",
+  remove_liquidity: "Removing liquidity...",
+  withdraw_to_address: "Sending transfer...",
+};
+
+// ==========================================================================
 // ChatView — main exported component
-// ---------------------------------------------------------------------------
+// ==========================================================================
 
 export function ChatView() {
   const {
@@ -52,123 +135,124 @@ export function ChatView() {
     session,
   } = useApp();
 
-  // -----------------------------------------------------------------------
-  // Chat transport — sends session + persona + wallet info to server
-  // -----------------------------------------------------------------------
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const initialSentRef = useRef(false);
+  const conversationIdRef = useRef<string | null>(activeConversationId);
+  const loadedConversationRef = useRef<string | null>(null);
+  const isLoadingFromDb = useRef(false);
+  const lastPersistedCount = useRef(0);
+  const skipNextPersistReset = useRef(false);
 
-  const transport = useMemo(
+  // --- Stable transport ---
+  // Use a ref to always read latest context values without recreating transport
+  const ctxRef = useRef({ persona, userAddress, session });
+  useEffect(() => {
+    ctxRef.current = { persona, userAddress, session };
+  }, [persona, userAddress, session]);
+
+  const [transport] = useState(
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
-        body: {
-          persona,
-          userAddress,
-          walletAddress: userAddress,
-          session,
-        },
+        body: () => ({
+          persona: ctxRef.current.persona,
+          userAddress: ctxRef.current.userAddress,
+          walletAddress: ctxRef.current.userAddress,
+          session: ctxRef.current.session,
+        }),
       }),
-    [persona, userAddress, session],
   );
 
+  // --- useChat ---
   const { messages, sendMessage, status, setMessages } = useChat({
     transport,
   });
 
   const [input, setInput] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const conversationIdRef = useRef<string | null>(activeConversationId);
-  const loadedConversationIdRef = useRef<string | null>(null);
-  const hasSentInitialRef = useRef(false);
+  const isLoading = status === "submitted" || status === "streaming";
 
-  const isLoading = status === "streaming" || status === "submitted";
-
-  // -----------------------------------------------------------------------
-  // Auto-send initial message from home search bar
-  // -----------------------------------------------------------------------
-
-  useEffect(() => {
-    if (initialChatMessage && !hasSentInitialRef.current) {
-      hasSentInitialRef.current = true;
-      sendMessage({ text: initialChatMessage });
-      setInitialChatMessage(null);
-    }
-  }, [initialChatMessage, sendMessage, setInitialChatMessage]);
-
-  useEffect(() => {
-    hasSentInitialRef.current = false;
-  }, [activeConversationId]);
-
-  // -----------------------------------------------------------------------
-  // Keep conversationIdRef in sync
-  // -----------------------------------------------------------------------
-
+  // --- Keep conversationIdRef in sync ---
   useEffect(() => {
     conversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
 
-  // -----------------------------------------------------------------------
-  // Load existing messages when switching to a conversation
-  // -----------------------------------------------------------------------
+  // --- Scroll to bottom ---
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isLoading]);
 
+  // --- Load messages when switching to existing conversation ---
   useEffect(() => {
     if (!activeConversationId) {
-      if (loadedConversationIdRef.current !== null) {
+      if (loadedConversationRef.current !== null) {
         setMessages([]);
-        loadedConversationIdRef.current = null;
+        loadedConversationRef.current = null;
       }
       return;
     }
-    if (loadedConversationIdRef.current === activeConversationId) return;
-    loadedConversationIdRef.current = activeConversationId;
+    if (loadedConversationRef.current === activeConversationId) return;
+    loadedConversationRef.current = activeConversationId;
 
+    isLoadingFromDb.current = true;
     fetch(`/api/conversations/${activeConversationId}/messages`)
-      .then((res) => res.json())
+      .then((r) => r.json())
       .then((data) => {
-        if (data.messages?.length > 0) {
-          const uiMessages: UIMessage[] = data.messages.map(
-            (m: { id: string; role: string; content: string; createdAt: string }) => ({
-              id: m.id,
-              role: m.role as "user" | "assistant",
-              parts: [{ type: "text" as const, text: m.content }],
-              createdAt: new Date(m.createdAt),
-            }),
-          );
-          setMessages(uiMessages);
-        } else {
-          setMessages([]);
-        }
+        const msgs = (data.messages ?? []).map(
+          (m: { id: string; role: string; content: string }) => ({
+            id: m.id,
+            role: m.role,
+            parts: [{ type: "text" as const, text: m.content }],
+          }),
+        );
+        setMessages(msgs);
       })
-      .catch(console.error);
+      .catch(console.error)
+      .finally(() => {
+        setTimeout(() => {
+          isLoadingFromDb.current = false;
+        }, 300);
+      });
   }, [activeConversationId, setMessages]);
 
-  // -----------------------------------------------------------------------
-  // Auto-scroll on new messages
-  // -----------------------------------------------------------------------
+  // --- Auto-send initial message from home search bar ---
+  useEffect(() => {
+    if (initialChatMessage && !initialSentRef.current) {
+      initialSentRef.current = true;
+      const timer = setTimeout(() => {
+        sendMessage({ text: initialChatMessage });
+        setInitialChatMessage(null);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [initialChatMessage, sendMessage, setInitialChatMessage]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    initialSentRef.current = false;
+  }, [activeConversationId]);
+
+  // --- Persist messages to DB when AI finishes responding ---
+  // Reset persisted count when switching conversations, unless we just
+  // created a new conversation for the current chat (skip flag).
+  useEffect(() => {
+    if (skipNextPersistReset.current) {
+      skipNextPersistReset.current = false;
+      return;
     }
-  }, [messages]);
-
-  // -----------------------------------------------------------------------
-  // Persist messages to DB when AI finishes responding
-  // -----------------------------------------------------------------------
-
-  const lastPersistedCountRef = useRef(0);
+    lastPersistedCount.current = 0;
+  }, [activeConversationId]);
 
   useEffect(() => {
     if (status !== "ready") return;
     if (messages.length === 0) return;
-    if (messages.length <= lastPersistedCountRef.current) return;
+    if (messages.length <= lastPersistedCount.current) return;
+    if (isLoadingFromDb.current) return;
 
-    const newMessages = messages.slice(lastPersistedCountRef.current);
-    lastPersistedCountRef.current = messages.length;
+    const newMsgs = messages.slice(lastPersistedCount.current);
+    lastPersistedCount.current = messages.length;
 
     (async () => {
       let convoId = conversationIdRef.current;
 
-      // Create conversation if needed
       if (!convoId && email) {
         try {
           const res = await fetch("/api/conversations", {
@@ -179,6 +263,12 @@ export function ChatView() {
           const data = await res.json();
           convoId = data.conversation.id;
           conversationIdRef.current = convoId;
+          // Mark as already loaded so the load-from-DB effect won't
+          // race against us and wipe the in-memory messages.
+          loadedConversationRef.current = convoId!;
+          // Skip the next lastPersistedCount reset since this isn't
+          // a real conversation switch — we just assigned an ID.
+          skipNextPersistReset.current = true;
           setActiveConversationId(convoId!);
           addConversation({
             id: convoId!,
@@ -193,12 +283,8 @@ export function ChatView() {
 
       if (!convoId) return;
 
-      for (const msg of newMessages) {
-        const content = msg.parts
-          .filter((p): p is { type: "text"; text: string } => p.type === "text")
-          .map((p) => p.text)
-          .join("");
-
+      for (const msg of newMsgs) {
+        const content = getMessageText(msg);
         if (!content.trim()) continue;
 
         try {
@@ -208,9 +294,13 @@ export function ChatView() {
             body: JSON.stringify({ role: msg.role, content }),
           });
 
-          // Set conversation title from first user message
-          if (msg.role === "user" && messages.indexOf(msg) === 0) {
-            const title = content.length > 50 ? content.slice(0, 47) + "..." : content;
+          if (
+            msg.role === "user" &&
+            newMsgs.indexOf(msg) === 0 &&
+            messages.indexOf(msg) === 0
+          ) {
+            const title =
+              content.length > 50 ? content.slice(0, 47) + "..." : content;
             updateConversationTitle(convoId, title);
           }
         } catch (err) {
@@ -218,48 +308,41 @@ export function ChatView() {
         }
       }
     })();
-  }, [status, messages, email, setActiveConversationId, addConversation, updateConversationTitle]);
+  }, [
+    status,
+    messages,
+    email,
+    setActiveConversationId,
+    addConversation,
+    updateConversationTitle,
+  ]);
 
-  useEffect(() => {
-    lastPersistedCountRef.current = 0;
-  }, [activeConversationId]);
-
-  // -----------------------------------------------------------------------
-  // Event handlers
-  // -----------------------------------------------------------------------
-
-  function handleBackToHome() {
+  // --- Handlers ---
+  function handleBack() {
     setChatActive(false);
     setInitialChatMessage(null);
   }
 
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
+  function handleSubmit(e?: React.FormEvent) {
+    e?.preventDefault?.();
+    if (!input?.trim() || isLoading) return;
     sendMessage({ text: input });
     setInput("");
   }
 
-  // User avatar initials
   const avatarInitials = email ? email.slice(0, 2).toUpperCase() : "U";
+  const messageList = messages || [];
 
-  // Deduplicate messages by id (keep last occurrence)
-  const deduped = useMemo(() => {
-    const seen = new Map<string, number>();
-    messages.forEach((m, i) => seen.set(m.id, i));
-    return messages.filter((m, i) => seen.get(m.id) === i);
-  }, [messages]);
-
-  // -----------------------------------------------------------------------
+  // =======================================================================
   // Render
-  // -----------------------------------------------------------------------
+  // =======================================================================
 
   return (
     <div className="flex h-full flex-col">
-      {/* Back to Home */}
+      {/* Back button */}
       <div className="px-8 pt-4 pb-1">
         <button
-          onClick={handleBackToHome}
+          onClick={handleBack}
           className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors font-medium"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
@@ -267,16 +350,12 @@ export function ChatView() {
         </button>
       </div>
 
-      {/* Messages Area */}
-      <ScrollArea className="flex-1 px-8 py-6" ref={scrollRef}>
+      {/* Messages area */}
+      <div className="flex-1 overflow-y-auto px-8 py-6">
         <div className="mx-auto max-w-2xl space-y-5">
           {/* Empty state */}
-          {messages.length === 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="py-12 text-center"
-            >
+          {messageList.length === 0 && (
+            <div className="py-12 text-center animate-in fade-in slide-in-from-bottom-2 duration-500">
               <div className="flex justify-center mb-5">
                 <DoodleMascot size={88} mood="happy" />
               </div>
@@ -287,30 +366,203 @@ export function ChatView() {
                 Ask me about yield farming on X Layer and I&apos;ll help you
                 deposit into the best pools.
               </p>
-            </motion.div>
+            </div>
           )}
 
-          {/* Message list */}
-          {deduped.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              avatarInitials={avatarInitials}
-            />
-          ))}
+          {/* Messages */}
+          {messageList.map((m: any) => {
+            const text = getMessageText(m);
+            const toolParts = getToolParts(m);
 
-          {/* Thinking indicator */}
-          {isLoading && messages.length > 0 && <ThinkingIndicator />}
+            // Skip assistant messages with no visible content
+            if (m.role === "assistant" && !text.trim() && toolParts.length === 0)
+              return null;
+
+            return (
+              <div
+                key={m.id}
+                className={cn(
+                  "flex gap-3 animate-in fade-in duration-300",
+                  m.role === "user" ? "justify-end" : "justify-start",
+                )}
+              >
+                {/* Assistant avatar */}
+                {m.role === "assistant" && (
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
+                    <MascotIcon size={20} />
+                  </div>
+                )}
+
+                {/* Message bubble */}
+                <div
+                  className={cn(
+                    "max-w-[75%] rounded-3xl px-5 py-3 text-sm leading-relaxed",
+                    m.role === "user"
+                      ? "bg-primary text-white rounded-br-lg"
+                      : "bg-white border border-border/60 text-[#1F2937] rounded-bl-lg shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
+                  )}
+                >
+                  {/* Text content */}
+                  {text && m.role === "user" && (
+                    <span className="whitespace-pre-wrap">{text}</span>
+                  )}
+                  {text && m.role !== "user" && (
+                    <div className="chat-markdown">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {text}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+
+                  {/* Tool parts */}
+                  {toolParts.map((part: any) => {
+                    const toolName = getToolNameRaw(part);
+                    const toolKey = getToolKey(part);
+                    const done = hasToolOutput(part);
+                    const errored = hasToolError(part);
+
+                    // Error state
+                    if (errored) {
+                      return (
+                        <div
+                          key={part.toolCallId}
+                          className="mt-3 w-full"
+                        >
+                          <div className="flex items-center gap-2.5 rounded-2xl bg-red-50 px-4 py-3">
+                            <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
+                            <p className="text-xs text-destructive">
+                              {getToolErrorMessage(part)}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // Loading state
+                    if (!done) {
+                      return (
+                        <div
+                          key={part.toolCallId}
+                          className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"
+                        >
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          <span>
+                            {TOOL_LABELS[toolName] ?? "Working..."}
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    // Output cards
+                    const output = part.output;
+                    if (!output) return null;
+
+                    switch (toolKey) {
+                      case "tool-get_balances":
+                        return (
+                          <BalancesCard
+                            key={part.toolCallId}
+                            output={output}
+                          />
+                        );
+                      case "tool-get_positions":
+                        return (
+                          <PositionsCard
+                            key={part.toolCallId}
+                            output={output}
+                          />
+                        );
+                      case "tool-swap_token":
+                        return (
+                          <SwapCard
+                            key={part.toolCallId}
+                            output={output}
+                          />
+                        );
+                      case "tool-add_liquidity":
+                        return (
+                          <LiquidityCard
+                            key={part.toolCallId}
+                            output={output}
+                            action="add"
+                          />
+                        );
+                      case "tool-remove_liquidity":
+                        return (
+                          <LiquidityCard
+                            key={part.toolCallId}
+                            output={output}
+                            action="remove"
+                          />
+                        );
+                      case "tool-withdraw_to_address":
+                        return (
+                          <TransferCard
+                            key={part.toolCallId}
+                            output={output}
+                          />
+                        );
+                      default:
+                        return (
+                          <div
+                            key={part.toolCallId}
+                            className="mt-3 flex items-center gap-2 text-muted-foreground text-xs"
+                          >
+                            <Check className="h-3.5 w-3.5 text-emerald-600" />
+                            <span>Done</span>
+                          </div>
+                        );
+                    }
+                  })}
+                </div>
+
+                {/* User avatar */}
+                {m.role === "user" && (
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-blue">
+                    <span className="text-xs font-bold text-[#3730A3]">
+                      {avatarInitials}
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Loading indicator */}
+          {isLoading &&
+            messageList.length > 0 &&
+            messageList[messageList.length - 1]?.role !== "assistant" && (
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
+                  <MascotIcon size={20} />
+                </div>
+                <div className="flex items-center gap-2 rounded-3xl rounded-bl-lg border border-border/60 bg-white px-5 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+                  <div className="flex gap-1.5">
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:0ms]" />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:150ms]" />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:300ms]" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+          <div ref={messagesEndRef} className="h-4" />
         </div>
-      </ScrollArea>
+      </div>
 
-      {/* Input Area */}
+      {/* Input area */}
       <div className="px-8 pb-6 pt-2">
         <form onSubmit={handleSubmit} className="mx-auto max-w-2xl">
           <div className="card-playful flex items-center gap-2 px-5 py-2">
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit();
+                }
+              }}
               placeholder="Tell me about your yield goals..."
               disabled={isLoading}
               className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/50 outline-none py-2 disabled:opacity-50"
@@ -318,7 +570,7 @@ export function ChatView() {
             <Button
               type="submit"
               size="icon"
-              disabled={isLoading || !input.trim()}
+              disabled={isLoading || !input?.trim()}
               className="shrink-0"
             >
               {isLoading ? (
@@ -334,210 +586,35 @@ export function ChatView() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// MessageBubble — renders a single message (user or assistant)
-// ---------------------------------------------------------------------------
+// ==========================================================================
+// BalancesCard
+// ==========================================================================
 
-function MessageBubble({
-  message,
-  avatarInitials,
-}: {
-  message: UIMessage;
-  avatarInitials: string;
-}) {
-  if (!message.parts || !Array.isArray(message.parts)) return null;
-
-  // Check if the message has any visible content
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const hasVisible = message.role === "user" || message.parts.some((p: any) => {
-    if (!p?.type) return false;
-    if (p.type === "text" && p.text) return true;
-    // Tool parts (either "tool-xxx" or "dynamic-tool")
-    const tType = p.type === "dynamic-tool" ? `tool-${p.toolName}` : p.type;
-    if (typeof tType === "string" && tType.startsWith("tool-") && p.state) return true;
-    return false;
-  });
-
-  if (!hasVisible) return null;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25 }}
-      className={cn(
-        "flex gap-3",
-        message.role === "user" ? "justify-end" : "justify-start",
-      )}
-    >
-      {message.role === "assistant" && (
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
-          <MascotIcon size={20} />
-        </div>
-      )}
-      <div
-        className={cn(
-          "max-w-[75%] rounded-3xl px-5 py-3 text-sm leading-relaxed",
-          message.role === "user"
-            ? "bg-primary text-white rounded-br-lg"
-            : "bg-white border border-border/60 text-[#1F2937] rounded-bl-lg shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
-        )}
-      >
-        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-        {message.parts.map((part: any, i: number) => (
-          <MessagePart
-            key={`${message.id}-${i}`}
-            part={part}
-            role={message.role}
-          />
-        ))}
-      </div>
-      {message.role === "user" && (
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-blue">
-          <span className="text-xs font-bold text-[#3730A3]">{avatarInitials}</span>
-        </div>
-      )}
-    </motion.div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// MessagePart — renders a single part within a message
-// ---------------------------------------------------------------------------
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function MessagePart({ part, role }: { part: any; role: string }) {
-  if (!part?.type) return null;
-
-  // --- Text ---
-  if (part.type === "text") {
-    if (!part.text) return null;
-    if (role === "assistant") {
-      return (
-        <div className="chat-markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.text}</ReactMarkdown>
-        </div>
-      );
-    }
-    return <p className="whitespace-pre-wrap">{part.text}</p>;
-  }
-
-  // --- Step start (invisible boundary) ---
-  if (part.type === "step-start") return null;
-
-  // --- Tool parts ---
-  // Normalize dynamic-tool → tool-{name}
-  const toolType =
-    part.type === "dynamic-tool" ? `tool-${part.toolName}` : part.type;
-
-  if (typeof toolType !== "string" || !toolType.startsWith("tool-")) return null;
-
-  // Loading states
-  if (part.state === "input-streaming" || part.state === "input-available") {
-    return <ToolLoading toolType={toolType} />;
-  }
-
-  // Error from tool output
-  if (part.state === "output-available" && part.output?.error) {
-    return <ToolError message={part.output.message || "Something went wrong."} />;
-  }
-
-  // Output cards for each tool
-  if (part.state === "output-available" && part.output) {
-    switch (toolType) {
-      case "tool-get_balances":
-        return <BalancesCard output={part.output} />;
-      case "tool-swap_token":
-        return <SwapCard output={part.output} />;
-      case "tool-add_liquidity":
-        return <LiquidityCard output={part.output} action="add" />;
-      case "tool-remove_liquidity":
-        return <LiquidityCard output={part.output} action="remove" />;
-      case "tool-withdraw_to_address":
-        return <TransferCard output={part.output} />;
-      default:
-        return null;
-    }
-  }
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Tool loading indicator
-// ---------------------------------------------------------------------------
-
-function ToolLoading({ toolType }: { toolType: string }) {
-  const labels: Record<string, string> = {
-    "tool-get_balances": "Checking balances...",
-    "tool-swap_token": "Executing swap...",
-    "tool-add_liquidity": "Adding liquidity...",
-    "tool-remove_liquidity": "Removing liquidity...",
-    "tool-withdraw_to_address": "Sending transfer...",
-  };
-  return (
-    <div className="my-2 flex items-center gap-2 text-xs text-muted-foreground">
-      <Loader2 className="h-3 w-3 animate-spin" />
-      {labels[toolType] ?? "Working..."}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Tool error card
-// ---------------------------------------------------------------------------
-
-function ToolError({ message }: { message: string }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="my-2 w-full"
-    >
-      <div className="flex items-center gap-2.5 rounded-2xl bg-red-50 px-4 py-3">
-        <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
-        <p className="text-xs text-destructive">{message}</p>
-      </div>
-    </motion.div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Balances card
-// ---------------------------------------------------------------------------
-
-function BalancesCard({
-  output,
-}: {
-  output: {
-    balances: { symbol: string; balance: string; usdValue: string }[];
-    lpPositions?: { tokenId: string; liquidity: string }[];
-  };
-}) {
-  const { balances, lpPositions } = output;
+function BalancesCard({ output }: { output: any }) {
+  const balances = output?.balances;
+  const lpPositions = output?.lpPositions;
 
   if (!balances || balances.length === 0) {
     return (
-      <div className="my-2 text-xs text-muted-foreground">
+      <div className="mt-3 text-xs text-muted-foreground">
         No token balances found.
       </div>
     );
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="my-2 w-full"
-    >
+    <div className="mt-3 w-full">
       <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
         <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-2">
           <Wallet className="h-3.5 w-3.5 text-primary" />
           Your Balances
         </div>
         <div className="space-y-1.5">
-          {balances.map((b, idx) => (
-            <div key={idx} className="flex items-center justify-between text-xs">
+          {balances.map((b: any, idx: number) => (
+            <div
+              key={idx}
+              className="flex items-center justify-between text-xs"
+            >
               <span className="font-medium text-[#1F2937]">{b.symbol}</span>
               <div className="text-right">
                 <span className="text-[#1F2937]">
@@ -559,8 +636,11 @@ function BalancesCard({
               <Droplets className="h-3.5 w-3.5 text-primary" />
               LP Positions
             </div>
-            {lpPositions.map((lp) => (
-              <div key={lp.tokenId} className="flex items-center justify-between text-xs">
+            {lpPositions.map((lp: any) => (
+              <div
+                key={lp.tokenId}
+                className="flex items-center justify-between text-xs"
+              >
                 <span className="text-muted-foreground">#{lp.tokenId}</span>
                 <span className="font-mono text-[#1F2937]">
                   {BigInt(lp.liquidity) > 0n ? "Active" : "Empty"}
@@ -570,73 +650,150 @@ function BalancesCard({
           </div>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Swap card
-// ---------------------------------------------------------------------------
+// ==========================================================================
+// PositionsCard
+// ==========================================================================
 
-function SwapCard({
-  output,
-}: {
-  output: {
-    fromToken: string;
-    toToken: string;
-    amountIn: string;
-    expectedOut: string;
-    txHash: string;
-    explorerUrl: string;
-  };
-}) {
+function PositionsCard({ output }: { output: any }) {
+  const positions = output?.positions;
+  const message = output?.message;
+
+  if (!positions || positions.length === 0) {
+    return (
+      <div className="mt-3 text-xs text-muted-foreground">
+        {message || "No LP positions found."}
+      </div>
+    );
+  }
+
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="my-2 w-full"
-    >
+    <div className="mt-3 w-full">
+      <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-3">
+          <Droplets className="h-3.5 w-3.5 text-primary" />
+          Your LP Positions ({positions.length})
+        </div>
+        <div className="space-y-3">
+          {positions.map((pos: any) => (
+            <div
+              key={pos.tokenId}
+              className="rounded-xl bg-white px-3 py-2.5 border border-border/40"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-[#1F2937]">
+                    {pos.pair}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground bg-[#F1F5F9] rounded px-1.5 py-0.5">
+                    {pos.feeTier}
+                  </span>
+                </div>
+                <span
+                  className={cn(
+                    "text-[10px] font-medium px-1.5 py-0.5 rounded",
+                    pos.isActive
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-gray-100 text-gray-500",
+                  )}
+                >
+                  {pos.isActive ? "Active" : "Closed"}
+                </span>
+              </div>
+
+              {/* Amounts */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">
+                    {pos.token0Symbol}
+                  </span>
+                  <span className="font-medium text-[#1F2937]">
+                    {formatNum(pos.amount0)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">
+                    {pos.token1Symbol}
+                  </span>
+                  <span className="font-medium text-[#1F2937]">
+                    {formatNum(pos.amount1)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Uncollected fees */}
+              {pos.hasUnclaimedFees && (
+                <div className="mt-1.5 pt-1.5 border-t border-border/30">
+                  <p className="text-[10px] text-muted-foreground mb-0.5">
+                    Uncollected fees
+                  </p>
+                  <div className="flex items-center gap-3 text-[11px]">
+                    <span className="text-emerald-700">
+                      +{formatNum(pos.unclaimedFees0)} {pos.token0Symbol}
+                    </span>
+                    <span className="text-emerald-700">
+                      +{formatNum(pos.unclaimedFees1)} {pos.token1Symbol}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Token ID */}
+              <div className="mt-1.5 text-[10px] text-muted-foreground">
+                Position #{pos.tokenId}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================================================
+// SwapCard
+// ==========================================================================
+
+function SwapCard({ output }: { output: any }) {
+  return (
+    <div className="mt-3 w-full">
       <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
         <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-2">
           <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
           Swap Complete
         </div>
         <p className="text-sm font-medium text-[#1F2937]">
-          {output.amountIn} {output.fromToken} → {output.expectedOut} {output.toToken}
+          {output.amountIn} {output.fromToken} → {output.expectedOut}{" "}
+          {output.toToken}
         </p>
-        <TxHashLink txHash={output.txHash} explorerUrl={output.explorerUrl} />
+        {output.txHash && output.explorerUrl && (
+          <TxHashLink txHash={output.txHash} explorerUrl={output.explorerUrl} />
+        )}
       </div>
-    </motion.div>
+    </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Liquidity card (add or remove)
-// ---------------------------------------------------------------------------
+// ==========================================================================
+// LiquidityCard
+// ==========================================================================
 
 function LiquidityCard({
   output,
   action,
 }: {
-  output: {
-    pool?: string;
-    amountUSDT?: string;
-    amountWOKB?: string;
-    tokenId?: string;
-    percentRemoved?: number;
-    txHash?: string;
-    collectTxHash?: string;
-    explorerUrl: string;
-  };
+  output: any;
   action: "add" | "remove";
 }) {
   const isAdd = action === "add";
+  const txHash = output.txHash || output.collectTxHash || "";
+
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="my-2 w-full"
-    >
+    <div className="mt-3 w-full">
       <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
         <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-2">
           <Droplets className="h-3.5 w-3.5 text-primary" />
@@ -644,63 +801,60 @@ function LiquidityCard({
         </div>
         {isAdd ? (
           <p className="text-sm font-medium text-[#1F2937]">
-            {output.amountUSDT} USDT + {output.amountWOKB} WOKB → {output.pool ?? "USDT/WOKB"} pool
+            {output.amountUSDT} USDT + {output.amountWOKB} WOKB →{" "}
+            {output.pool ?? "USDT/WOKB"} pool
           </p>
         ) : (
           <p className="text-sm font-medium text-[#1F2937]">
-            Position #{output.tokenId} — {output.percentRemoved ?? 100}% removed
+            Position #{output.tokenId} — {output.percentRemoved ?? 100}%
+            removed
           </p>
         )}
-        <TxHashLink
-          txHash={output.txHash || output.collectTxHash || ""}
-          explorerUrl={output.explorerUrl}
-        />
+        {txHash && output.explorerUrl && (
+          <TxHashLink txHash={txHash} explorerUrl={output.explorerUrl} />
+        )}
       </div>
-    </motion.div>
+    </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Transfer (withdraw) card
-// ---------------------------------------------------------------------------
+// ==========================================================================
+// TransferCard
+// ==========================================================================
 
-function TransferCard({
-  output,
-}: {
-  output: {
-    token: string;
-    amount: string;
-    toAddress: string;
-    txHash: string;
-    explorerUrl: string;
-  };
-}) {
-  const short = `${output.toAddress.slice(0, 8)}...${output.toAddress.slice(-6)}`;
+function TransferCard({ output }: { output: any }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="my-2 w-full"
-    >
+    <div className="mt-3 w-full">
       <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
         <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-2">
           <ArrowUpRight className="h-3.5 w-3.5 text-primary" />
           Transfer Sent
         </div>
         <p className="text-sm font-medium text-[#1F2937]">
-          {output.amount} {output.token} → <span className="font-mono">{short}</span>
+          {output.amount} {output.token} →{" "}
+          <span className="font-mono">
+            {output.toAddress ? shortAddr(output.toAddress) : ""}
+          </span>
         </p>
-        <TxHashLink txHash={output.txHash} explorerUrl={output.explorerUrl} />
+        {output.txHash && output.explorerUrl && (
+          <TxHashLink txHash={output.txHash} explorerUrl={output.explorerUrl} />
+        )}
       </div>
-    </motion.div>
+    </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Tx hash link (reusable)
-// ---------------------------------------------------------------------------
+// ==========================================================================
+// TxHashLink
+// ==========================================================================
 
-function TxHashLink({ txHash, explorerUrl }: { txHash: string; explorerUrl: string }) {
+function TxHashLink({
+  txHash,
+  explorerUrl,
+}: {
+  txHash: string;
+  explorerUrl: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   if (!txHash) return null;
@@ -736,30 +890,5 @@ function TxHashLink({ txHash, explorerUrl }: { txHash: string; explorerUrl: stri
         Explorer
       </a>
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Thinking indicator
-// ---------------------------------------------------------------------------
-
-function ThinkingIndicator() {
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="flex items-center gap-3"
-    >
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
-        <MascotIcon size={20} />
-      </div>
-      <div className="flex items-center gap-2 rounded-3xl rounded-bl-lg border border-border/60 bg-white px-5 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
-        <div className="flex gap-1.5">
-          <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:0ms]" />
-          <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:150ms]" />
-          <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:300ms]" />
-        </div>
-      </div>
-    </motion.div>
   );
 }

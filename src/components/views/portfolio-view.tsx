@@ -1,12 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import {
-  DollarSign,
-  TrendingUp,
-  Activity,
-  ExternalLink,
   Wallet,
   Coins,
   ArrowUpRight,
@@ -17,6 +12,9 @@ import {
   AlertCircle,
   Copy,
   Check,
+  Droplets,
+  ExternalLink,
+  TrendingUp,
 } from "lucide-react";
 import {
   Card,
@@ -29,21 +27,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DoodleMascot } from "@/components/doodle-mascot";
 import { useApp } from "@/providers/app-provider";
-import { STRATEGIES } from "@/lib/strategies";
 import { signAndBroadcast } from "@/lib/okx-api";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-interface ActiveStrategyData {
-  id: string;
-  strategyId: string;
-  depositAmount: number;
-  currentValue: number;
-  txHash: string;
-  createdAt: string;
-}
 
 interface TokenBalanceData {
   chainIndex: string;
@@ -55,6 +43,29 @@ interface TokenBalanceData {
   isRiskToken: boolean;
 }
 
+/** Serialized version of DetailedPositionInfo (BigInts as strings) */
+interface PositionData {
+  tokenId: string;
+  token0: string;
+  token1: string;
+  fee: number;
+  tickLower: number;
+  tickUpper: number;
+  liquidity: string;
+  token0Symbol: string;
+  token1Symbol: string;
+  token0Decimals: number;
+  token1Decimals: number;
+  amount0: string;
+  amount1: string;
+  fees0: string;
+  fees1: string;
+  hasUnclaimedFees: boolean;
+  isActive: boolean;
+  feeTierLabel: string;
+}
+
+// Token withdraw (send) types
 type WithdrawStep =
   | "idle"
   | "form"
@@ -80,6 +91,22 @@ const INITIAL_WITHDRAW: WithdrawState = {
   amount: "",
 };
 
+// LP position withdraw types
+type PositionWithdrawStep =
+  | "idle"
+  | "confirm"
+  | "signing"
+  | "broadcasting"
+  | "completed"
+  | "error";
+
+interface PositionWithdrawState {
+  step: PositionWithdrawStep;
+  tokenId: string | null;
+  collectTxHash?: string;
+  error?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -95,47 +122,34 @@ function getRiskLabel(level: number): string {
   return "Ape In";
 }
 
+function fmtUsd(value: number): string {
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export function PortfolioView() {
   const { email, userAddress, session, persona } = useApp();
-  const [activeStrategies, setActiveStrategies] = useState<
-    ActiveStrategyData[]
-  >([]);
   const [balances, setBalances] = useState<TokenBalanceData[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [positions, setPositions] = useState<PositionData[]>([]);
   const [balancesLoading, setBalancesLoading] = useState(true);
+  const [positionsLoading, setPositionsLoading] = useState(true);
 
-  // Withdraw state
+  // Token withdraw (send) state
   const [withdraw, setWithdraw] = useState<WithdrawState>(INITIAL_WITHDRAW);
   const [copiedTx, setCopiedTx] = useState(false);
 
-  // Fetch active strategies
-  useEffect(() => {
-    if (!email) {
-      setActiveStrategies([]);
-      setLoading(false);
-      return;
-    }
+  // LP position withdraw state
+  const [positionWithdraw, setPositionWithdraw] =
+    useState<PositionWithdrawState>({ step: "idle", tokenId: null });
+  const [copiedPositionTx, setCopiedPositionTx] = useState(false);
 
-    setLoading(true);
-    fetch(`/api/strategies?userAddress=${encodeURIComponent(email)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        if (data.strategies) {
-          setActiveStrategies(data.strategies);
-        }
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [email]);
-
-  // Fetch real token balances from OKX Wallet API
+  // ---- Fetch wallet balances from OKX API ----
   const fetchBalances = useCallback(() => {
     if (!userAddress) {
       setBalances([]);
@@ -147,36 +161,52 @@ export function PortfolioView() {
     fetch("/api/balances", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        address: userAddress,
-      }),
+      body: JSON.stringify({ address: userAddress }),
     })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
       .then((data) => {
-        if (data.balances) {
-          setBalances(data.balances);
-        }
+        if (data.balances) setBalances(data.balances);
       })
       .catch(console.error)
       .finally(() => setBalancesLoading(false));
+  }, [userAddress]);
+
+  // ---- Fetch LP positions from on-chain ----
+  const fetchPositions = useCallback(() => {
+    if (!userAddress) {
+      setPositions([]);
+      setPositionsLoading(false);
+      return;
+    }
+
+    setPositionsLoading(true);
+    fetch(`/api/positions?address=${encodeURIComponent(userAddress)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (data.positions) setPositions(data.positions);
+      })
+      .catch(console.error)
+      .finally(() => setPositionsLoading(false));
   }, [userAddress]);
 
   useEffect(() => {
     fetchBalances();
   }, [fetchBalances]);
 
+  useEffect(() => {
+    fetchPositions();
+  }, [fetchPositions]);
+
   // ------- Withdraw handlers -------
 
   function openWithdrawForm(token: TokenBalanceData) {
-    setWithdraw({
-      step: "form",
-      token,
-      toAddress: "",
-      amount: "",
-    });
+    setWithdraw({ step: "form", token, toAddress: "", amount: "" });
   }
 
   function closeWithdraw() {
@@ -187,7 +217,6 @@ export function PortfolioView() {
   function handleSetMaxAmount() {
     if (!withdraw.token) return;
     const bal = parseFloat(withdraw.token.balance) || 0;
-    // For native token, leave a tiny amount for gas
     const isNative =
       !withdraw.token.tokenAddress ||
       withdraw.token.tokenAddress === "" ||
@@ -213,18 +242,12 @@ export function PortfolioView() {
     setWithdraw((prev) => ({ ...prev, step: "signing" }));
 
     try {
-      // Pass the human-readable amount as value and let the OKX agentic
-      // wallet backend handle wei conversion & calldata construction.
-      // This matches the Rust CLI's cmd_send approach: it passes `amount`
-      // directly as `value` with `contract_addr` for ERC-20 tokens and
-      // NO inputData — the OKX backend builds the transfer() calldata.
       const result = await signAndBroadcast({
         session,
         toAddr: withdraw.toAddress,
         value: withdraw.amount,
         contractAddr: isNative ? undefined : token.tokenAddress,
-        // No inputData — OKX backend builds the ERC-20 calldata itself
-        isContractCall: false, // Matches Rust: cmd_send passes is_contract_call=false
+        isContractCall: false,
         onProgress: (step) => {
           if (step === "broadcasting") {
             setWithdraw((prev) => ({ ...prev, step: "broadcasting" }));
@@ -258,28 +281,89 @@ export function PortfolioView() {
     }
   }
 
+  // ------- Position withdraw handlers -------
+
+  function openPositionWithdraw(tokenId: string) {
+    setPositionWithdraw({ step: "confirm", tokenId });
+  }
+
+  function closePositionWithdraw() {
+    setPositionWithdraw({ step: "idle", tokenId: null });
+    setCopiedPositionTx(false);
+  }
+
+  async function executePositionWithdraw() {
+    if (!session || !positionWithdraw.tokenId) return;
+
+    setPositionWithdraw((prev) => ({ ...prev, step: "signing" }));
+
+    try {
+      const res = await fetch("/api/positions/withdraw", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session,
+          tokenId: positionWithdraw.tokenId,
+          percentToRemove: 100,
+        }),
+      });
+
+      // Update UI to broadcasting once request is in flight
+      setPositionWithdraw((prev) => ({ ...prev, step: "broadcasting" }));
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      setPositionWithdraw((prev) => ({
+        ...prev,
+        step: "completed",
+        collectTxHash: data.collectTxHash,
+      }));
+
+      // Refresh positions + balances after successful withdrawal
+      setTimeout(() => {
+        fetchPositions();
+        fetchBalances();
+      }, 3000);
+    } catch (err) {
+      console.error("Position withdraw failed:", err);
+      setPositionWithdraw((prev) => ({
+        ...prev,
+        step: "error",
+        error: err instanceof Error ? err.message : "Withdraw failed",
+      }));
+    }
+  }
+
+  function copyPositionTxHash() {
+    if (positionWithdraw.collectTxHash) {
+      navigator.clipboard.writeText(positionWithdraw.collectTxHash);
+      setCopiedPositionTx(true);
+      setTimeout(() => setCopiedPositionTx(false), 2000);
+    }
+  }
+
   // ------- Derived values -------
 
   const displayName = email ?? "Not Signed In";
-
-  const totalDeposit = activeStrategies.reduce(
-    (sum, s) => sum + s.depositAmount,
-    0,
-  );
-  const totalValue = activeStrategies.reduce(
-    (sum, s) => sum + s.currentValue,
-    0,
-  );
-  const performance =
-    totalDeposit > 0
-      ? (((totalValue - totalDeposit) / totalDeposit) * 100).toFixed(2)
-      : "0.00";
 
   const totalWalletUsd = balances.reduce((sum, b) => {
     const bal = parseFloat(b.balance) || 0;
     const price = parseFloat(b.tokenPrice) || 0;
     return sum + bal * price;
   }, 0);
+
+  // Sum up uncollected fees across all positions (approximate USD is hard
+  // without price feeds for each token — we show token amounts instead,
+  // but for the metric card we'll count the number)
+  const totalUnclaimedFees = positions.reduce((sum, p) => {
+    return sum + (parseFloat(p.fees0) || 0) + (parseFloat(p.fees1) || 0);
+  }, 0);
+
+  const activePositionCount = positions.filter((p) => p.isActive).length;
 
   // Form validation
   const formValid =
@@ -292,11 +376,7 @@ export function PortfolioView() {
   return (
     <div className="mx-auto max-w-4xl px-8 py-6">
       {/* User Header */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="mb-8"
-      >
+      <div className="mb-8 animate-in fade-in slide-in-from-top-2 duration-300">
         <Card className="border-0 bg-gradient-to-br from-pastel-lavender/40 via-white to-pastel-blue/30 shadow-none">
           <CardContent className="flex items-center justify-between py-6">
             <div>
@@ -317,26 +397,25 @@ export function PortfolioView() {
             </Badge>
           </CardContent>
         </Card>
-      </motion.div>
+      </div>
 
       {/* Key Metrics */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="mb-8 grid grid-cols-3 gap-5"
-      >
+      <div className="mb-8 grid grid-cols-3 gap-5 animate-in fade-in slide-in-from-bottom-2 duration-300 delay-100">
         <Card>
           <CardContent className="flex items-center gap-4 pt-6">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-pastel-blue">
-              <DollarSign className="h-5 w-5 text-[#3730A3]" />
+              <Wallet className="h-5 w-5 text-[#3730A3]" />
             </div>
             <div>
               <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">
-                Total Deposit
+                Wallet Value
               </p>
               <p className="text-xl font-bold text-[#1F2937]">
-                ${totalDeposit.toLocaleString()}
+                {balancesLoading ? (
+                  <span className="inline-block h-6 w-16 animate-pulse rounded bg-[#F1F5F9]" />
+                ) : (
+                  `$${fmtUsd(totalWalletUsd)}`
+                )}
               </p>
             </div>
           </CardContent>
@@ -345,14 +424,18 @@ export function PortfolioView() {
         <Card>
           <CardContent className="flex items-center gap-4 pt-6">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-pastel-mint">
-              <TrendingUp className="h-5 w-5 text-[#059669]" />
+              <Droplets className="h-5 w-5 text-[#059669]" />
             </div>
             <div>
               <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">
-                Performance
+                LP Positions
               </p>
-              <p className="text-xl font-bold text-[#059669]">
-                +{performance}%
+              <p className="text-xl font-bold text-[#1F2937]">
+                {positionsLoading ? (
+                  <span className="inline-block h-6 w-8 animate-pulse rounded bg-[#F1F5F9]" />
+                ) : (
+                  activePositionCount
+                )}
               </p>
             </div>
           </CardContent>
@@ -361,28 +444,29 @@ export function PortfolioView() {
         <Card>
           <CardContent className="flex items-center gap-4 pt-6">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-pastel-lavender">
-              <Activity className="h-5 w-5 text-[#5B21B6]" />
+              <TrendingUp className="h-5 w-5 text-[#5B21B6]" />
             </div>
             <div>
               <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">
-                Txs Made
+                Unclaimed Fees
               </p>
               <p className="text-xl font-bold text-[#1F2937]">
-                {activeStrategies.length}
+                {positionsLoading ? (
+                  <span className="inline-block h-6 w-12 animate-pulse rounded bg-[#F1F5F9]" />
+                ) : totalUnclaimedFees > 0 ? (
+                  <span className="text-[#059669]">Yes</span>
+                ) : (
+                  "None"
+                )}
               </p>
             </div>
           </CardContent>
         </Card>
-      </motion.div>
+      </div>
 
       {/* Wallet Balances (from OKX) */}
       {userAddress && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className="mb-8"
-        >
+        <div className="mb-8 animate-in fade-in duration-300 delay-200">
           <h2 className="mb-4 text-xs font-semibold text-muted-foreground/60 uppercase tracking-widest px-1">
             Wallet Balances
           </h2>
@@ -411,11 +495,7 @@ export function PortfolioView() {
                     Total Value
                   </span>
                   <span className="text-lg font-bold text-[#1F2937]">
-                    $
-                    {totalWalletUsd.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    ${fmtUsd(totalWalletUsd)}
                   </span>
                 </div>
                 <div className="space-y-1">
@@ -426,11 +506,14 @@ export function PortfolioView() {
                       const price = parseFloat(balance.tokenPrice) || 0;
                       const usdValue = bal * price;
                       const isSelected =
-                        withdraw.token?.tokenAddress === balance.tokenAddress &&
+                        withdraw.token?.tokenAddress ===
+                          balance.tokenAddress &&
                         withdraw.token?.symbol === balance.symbol;
 
                       return (
-                        <div key={`${balance.chainIndex}-${balance.tokenAddress}`}>
+                        <div
+                          key={`${balance.chainIndex}-${balance.tokenAddress}`}
+                        >
                           {/* Token Row */}
                           <div className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-0">
                             <div className="flex items-center gap-3">
@@ -453,11 +536,7 @@ export function PortfolioView() {
                             <div className="flex items-center gap-3">
                               <div className="text-right">
                                 <p className="text-sm font-semibold text-[#1F2937]">
-                                  $
-                                  {usdValue.toLocaleString(undefined, {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
+                                  ${fmtUsd(usdValue)}
                                 </p>
                                 {price > 0 && (
                                   <p className="text-xs text-muted-foreground">
@@ -484,31 +563,21 @@ export function PortfolioView() {
                           </div>
 
                           {/* Inline Withdraw Panel */}
-                          <AnimatePresence>
-                            {isSelected && withdraw.step !== "idle" && (
-                              <motion.div
-                                initial={{ height: 0, opacity: 0 }}
-                                animate={{ height: "auto", opacity: 1 }}
-                                exit={{ height: 0, opacity: 0 }}
-                                transition={{ duration: 0.25, ease: "easeInOut" }}
-                                className="overflow-hidden"
-                              >
-                                <div className="py-4 px-2">
-                                  <WithdrawPanel
-                                    withdraw={withdraw}
-                                    setWithdraw={setWithdraw}
-                                    formValid={formValid}
-                                    onConfirm={proceedToConfirm}
-                                    onExecute={executeWithdraw}
-                                    onClose={closeWithdraw}
-                                    onSetMax={handleSetMaxAmount}
-                                    onCopyTx={copyTxHash}
-                                    copiedTx={copiedTx}
-                                  />
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
+                          {isSelected && withdraw.step !== "idle" && (
+                            <div className="py-4 px-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                              <WithdrawPanel
+                                withdraw={withdraw}
+                                setWithdraw={setWithdraw}
+                                formValid={formValid}
+                                onConfirm={proceedToConfirm}
+                                onExecute={executeWithdraw}
+                                onClose={closeWithdraw}
+                                onSetMax={handleSetMaxAmount}
+                                onCopyTx={copyTxHash}
+                                copiedTx={copiedTx}
+                              />
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -516,20 +585,16 @@ export function PortfolioView() {
               </CardContent>
             </Card>
           )}
-        </motion.div>
+        </div>
       )}
 
-      {/* Current Strategies */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.3 }}
-      >
+      {/* Current Positions (on-chain Uniswap V3 LP) */}
+      <div className="animate-in fade-in duration-300 delay-300">
         <h2 className="mb-4 text-xs font-semibold text-muted-foreground/60 uppercase tracking-widest px-1">
-          Current Strategies
+          Current Positions
         </h2>
 
-        {loading ? (
+        {positionsLoading ? (
           <div className="grid gap-5 md:grid-cols-2">
             {[1, 2].map((i) => (
               <Card key={i}>
@@ -541,7 +606,7 @@ export function PortfolioView() {
               </Card>
             ))}
           </div>
-        ) : activeStrategies.length === 0 ? (
+        ) : positions.length === 0 ? (
           <Card className="shadow-none">
             <CardContent className="py-16 text-center">
               <DoodleMascot
@@ -550,95 +615,416 @@ export function PortfolioView() {
                 className="mx-auto mb-4"
               />
               <p className="text-muted-foreground font-medium">
-                No active strategies yet
+                No active LP positions
               </p>
               <p className="text-sm text-muted-foreground/60 mt-1">
-                Start chatting with the AI to find your first vault!
+                Chat with the AI to add liquidity on Uniswap V3!
               </p>
             </CardContent>
           </Card>
         ) : (
           <div className="grid gap-5 md:grid-cols-2">
-            {activeStrategies.map((active, i) => {
-              const strategy = STRATEGIES.find(
-                (s) => s.id === active.strategyId,
-              );
-              if (!strategy) return null;
-              const pnl = active.currentValue - active.depositAmount;
-              const pnlPct = (
-                (pnl / active.depositAmount) *
-                100
-              ).toFixed(2);
-
-              return (
-                <motion.div
-                  key={active.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.3 + i * 0.1 }}
-                >
-                  <Card>
-                    <CardHeader className="pb-3">
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-base">
-                          {strategy.name}
-                        </CardTitle>
-                        <Badge variant="mint" className="text-xs">
-                          Active
-                        </Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Deposited</span>
-                        <span className="font-semibold text-[#1F2937]">
-                          ${active.depositAmount.toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">
-                          Current Value
-                        </span>
-                        <span className="font-semibold text-[#1F2937]">
-                          ${active.currentValue.toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">PnL</span>
-                        <span
-                          className={`font-semibold ${pnl >= 0 ? "text-[#059669]" : "text-destructive"}`}
-                        >
-                          {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} ({pnlPct}%)
-                        </span>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full gap-1.5 mt-1"
-                        onClick={() =>
-                          window.open(
-                            `https://www.okx.com/explorer/xlayer/tx/${active.txHash}`,
-                            "_blank",
-                          )
-                        }
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                        View on Explorer
-                      </Button>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              );
-            })}
+            {positions.map((pos, i) => (
+              <div
+                key={pos.tokenId}
+                className="animate-in fade-in slide-in-from-bottom-2 duration-300"
+                style={{ animationDelay: `${300 + i * 80}ms` }}
+              >
+                <PositionCard
+                  position={pos}
+                  withdrawState={
+                    positionWithdraw.tokenId === pos.tokenId
+                      ? positionWithdraw
+                      : null
+                  }
+                  onWithdraw={() => openPositionWithdraw(pos.tokenId)}
+                  onConfirmWithdraw={executePositionWithdraw}
+                  onCancelWithdraw={closePositionWithdraw}
+                  onCopyTx={copyPositionTxHash}
+                  copiedTx={copiedPositionTx}
+                />
+              </div>
+            ))}
           </div>
         )}
-      </motion.div>
+      </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Withdraw Panel — Inline sub-component
+// Position Card
+// ---------------------------------------------------------------------------
+
+function PositionCard({
+  position: pos,
+  withdrawState,
+  onWithdraw,
+  onConfirmWithdraw,
+  onCancelWithdraw,
+  onCopyTx,
+  copiedTx,
+}: {
+  position: PositionData;
+  withdrawState: PositionWithdrawState | null;
+  onWithdraw: () => void;
+  onConfirmWithdraw: () => void;
+  onCancelWithdraw: () => void;
+  onCopyTx: () => void;
+  copiedTx: boolean;
+}) {
+  const pairLabel = `${pos.token0Symbol} / ${pos.token1Symbol}`;
+  const amount0 = parseFloat(pos.amount0) || 0;
+  const amount1 = parseFloat(pos.amount1) || 0;
+  const fees0 = parseFloat(pos.fees0) || 0;
+  const fees1 = parseFloat(pos.fees1) || 0;
+
+  const step = withdrawState?.step ?? "idle";
+  const isWithdrawing = step !== "idle";
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Droplets className="h-4 w-4 text-[#6366F1]" />
+            {pairLabel}
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="text-[10px] font-mono">
+              {pos.feeTierLabel}
+            </Badge>
+            <Badge
+              variant={pos.isActive ? "mint" : "secondary"}
+              className="text-xs"
+            >
+              {pos.isActive ? "Active" : "Closed"}
+            </Badge>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {/* Token Amounts */}
+        <div className="flex justify-between text-sm">
+          <span className="text-muted-foreground">{pos.token0Symbol}</span>
+          <span className="font-semibold text-[#1F2937] font-mono">
+            {amount0.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+          </span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span className="text-muted-foreground">{pos.token1Symbol}</span>
+          <span className="font-semibold text-[#1F2937] font-mono">
+            {amount1.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+          </span>
+        </div>
+
+        {/* Uncollected Fees */}
+        {pos.hasUnclaimedFees && (
+          <div className="rounded-xl bg-pastel-mint/30 border border-[#D1FAE5] p-2.5 space-y-1">
+            <p className="text-[10px] font-semibold text-[#059669] uppercase tracking-wider">
+              Uncollected Fees
+            </p>
+            {fees0 > 0 && (
+              <div className="flex justify-between text-xs">
+                <span className="text-muted-foreground">{pos.token0Symbol}</span>
+                <span className="font-semibold text-[#059669] font-mono">
+                  +{fees0.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                </span>
+              </div>
+            )}
+            {fees1 > 0 && (
+              <div className="flex justify-between text-xs">
+                <span className="text-muted-foreground">{pos.token1Symbol}</span>
+                <span className="font-semibold text-[#059669] font-mono">
+                  +{fees1.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Inline Position Withdraw Flow */}
+        {isWithdrawing && (
+          <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+            <PositionWithdrawPanel
+              step={step}
+              position={pos}
+              collectTxHash={withdrawState?.collectTxHash}
+              error={withdrawState?.error}
+              onConfirm={onConfirmWithdraw}
+              onCancel={onCancelWithdraw}
+              onCopyTx={onCopyTx}
+              copiedTx={copiedTx}
+            />
+          </div>
+        )}
+
+        {/* Position ID + Actions */}
+        <div className="flex items-center justify-between pt-1">
+          <span className="text-[10px] text-muted-foreground/50 font-mono">
+            #{pos.tokenId}
+          </span>
+          <div className="flex items-center gap-1.5">
+            {pos.isActive && !isWithdrawing && (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="gap-1 text-[#DC2626] hover:text-[#B91C1C] hover:bg-red-50"
+                onClick={onWithdraw}
+              >
+                <ArrowUpRight className="h-3 w-3" />
+                Withdraw
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="xs"
+              className="gap-1 text-muted-foreground hover:text-[#1F2937]"
+              onClick={() =>
+                window.open(
+                  `https://www.okx.com/explorer/xlayer/address/${pos.token0}`,
+                  "_blank",
+                )
+              }
+            >
+              <ExternalLink className="h-3 w-3" />
+              Explorer
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Position Withdraw Panel -- Inline sub-component for LP withdrawal
+// ---------------------------------------------------------------------------
+
+function PositionWithdrawPanel({
+  step,
+  position,
+  collectTxHash,
+  error,
+  onConfirm,
+  onCancel,
+  onCopyTx,
+  copiedTx,
+}: {
+  step: PositionWithdrawStep;
+  position: PositionData;
+  collectTxHash?: string;
+  error?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onCopyTx: () => void;
+  copiedTx: boolean;
+}) {
+  const pairLabel = `${position.token0Symbol} / ${position.token1Symbol}`;
+  const amount0 = parseFloat(position.amount0) || 0;
+  const amount1 = parseFloat(position.amount1) || 0;
+
+  // ---- Confirm step ----
+  if (step === "confirm") {
+    return (
+      <Card className="border-[#FEF3C7] bg-gradient-to-br from-pastel-peach/30 to-white shadow-none">
+        <CardContent className="pt-4 pb-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-[#1F2937]">
+              Withdraw Position
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onCancel}
+              className="text-muted-foreground hover:text-[#1F2937]"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="space-y-2 rounded-xl bg-white/60 border border-border/40 p-3">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Pool</span>
+              <span className="font-semibold text-[#1F2937]">{pairLabel}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">{position.token0Symbol}</span>
+              <span className="font-semibold text-[#1F2937] font-mono">
+                {amount0.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">{position.token1Symbol}</span>
+              <span className="font-semibold text-[#1F2937] font-mono">
+                {amount1.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Action</span>
+              <span className="font-semibold text-[#1F2937]">
+                Remove 100% liquidity
+              </span>
+            </div>
+          </div>
+
+          <p className="text-[10px] text-muted-foreground text-center">
+            This will remove all liquidity and collect uncollected fees
+          </p>
+
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              className="flex-1 gap-1.5"
+              onClick={onConfirm}
+            >
+              <ArrowUpRight className="h-3.5 w-3.5" />
+              Confirm Withdraw
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // ---- Signing / Broadcasting steps ----
+  if (step === "signing" || step === "broadcasting") {
+    return (
+      <Card className="border-[#E0E7FF] bg-gradient-to-br from-pastel-lavender/20 to-white shadow-none">
+        <CardContent className="py-6 text-center space-y-3">
+          <Loader2 className="h-7 w-7 mx-auto text-[#6366F1] animate-spin" />
+          <p className="text-sm font-semibold text-[#1F2937]">
+            {step === "signing"
+              ? "Signing transactions..."
+              : "Removing liquidity..."}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {step === "signing"
+              ? "Preparing decreaseLiquidity + collect"
+              : "Broadcasting to X Layer — this may take a moment"}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // ---- Completed step ----
+  if (step === "completed") {
+    return (
+      <Card className="border-[#D1FAE5] bg-gradient-to-br from-pastel-mint/30 to-white shadow-none">
+        <CardContent className="pt-4 pb-3 space-y-3">
+          <div className="text-center space-y-2">
+            <CheckCircle2 className="h-8 w-8 mx-auto text-[#059669]" />
+            <p className="text-sm font-semibold text-[#1F2937]">
+              Position Withdrawn!
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Liquidity removed and tokens returned to your wallet
+            </p>
+          </div>
+
+          {collectTxHash && (
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={onCopyTx}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-[#1F2937] transition-colors cursor-pointer"
+              >
+                {copiedTx ? (
+                  <Check className="h-3 w-3 text-[#059669]" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
+                <span className="font-mono">
+                  {collectTxHash.slice(0, 10)}...{collectTxHash.slice(-8)}
+                </span>
+              </button>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {collectTxHash && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 gap-1.5"
+                onClick={() =>
+                  window.open(
+                    `https://www.okx.com/explorer/xlayer/tx/${collectTxHash}`,
+                    "_blank",
+                  )
+                }
+              >
+                <ExternalLink className="h-3 w-3" />
+                Explorer
+              </Button>
+            )}
+            <Button
+              variant="default"
+              size="sm"
+              className="flex-1"
+              onClick={onCancel}
+            >
+              Done
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // ---- Error step ----
+  if (step === "error") {
+    return (
+      <Card className="border-destructive/30 bg-gradient-to-br from-red-50/50 to-white shadow-none">
+        <CardContent className="pt-4 pb-3 space-y-3">
+          <div className="text-center space-y-2">
+            <AlertCircle className="h-8 w-8 mx-auto text-destructive" />
+            <p className="text-sm font-semibold text-[#1F2937]">
+              Withdraw Failed
+            </p>
+            <p className="text-xs text-muted-foreground max-w-xs mx-auto">
+              {error || "Something went wrong. Please try again."}
+            </p>
+          </div>
+
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              onClick={onCancel}
+            >
+              Close
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              className="flex-1"
+              onClick={onConfirm}
+            >
+              Retry
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Withdraw Panel -- Inline sub-component (preserved from original)
 // ---------------------------------------------------------------------------
 
 interface WithdrawPanelProps {
@@ -730,7 +1116,8 @@ function WithdrawPanel({
                 onClick={onSetMax}
                 className="text-xs font-medium text-[#6366F1] hover:text-[#4F46E5] transition-colors cursor-pointer"
               >
-                Max: {bal.toLocaleString(undefined, { maximumFractionDigits: 6 })}{" "}
+                Max:{" "}
+                {bal.toLocaleString(undefined, { maximumFractionDigits: 6 })}{" "}
                 {token.symbol}
               </button>
             </div>
@@ -760,11 +1147,7 @@ function WithdrawPanel({
             )}
             {withdrawUsd > 0 && !amountExceedsBalance && (
               <p className="text-xs text-muted-foreground">
-                ~$
-                {withdrawUsd.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
+                ~${fmtUsd(withdrawUsd)}
               </p>
             )}
           </div>
@@ -823,11 +1206,7 @@ function WithdrawPanel({
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Value</span>
                 <span className="font-semibold text-[#1F2937]">
-                  ~$
-                  {withdrawUsd.toLocaleString(undefined, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
+                  ~${fmtUsd(withdrawUsd)}
                 </span>
               </div>
             )}
