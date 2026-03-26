@@ -16,7 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { DoodleMascot } from "@/components/doodle-mascot";
+import Image from "next/image";
 
 const RISK_LABELS = [
   { max: 25, label: "Safe Bet", emoji: "🛡️", variant: "mint" as const },
@@ -67,21 +67,56 @@ export function PersonaView() {
 
   return (
     <div className="mx-auto max-w-2xl px-8 py-6">
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="mb-8 flex items-center justify-between"
-      >
-        <div>
-          <h1 className="text-2xl font-bold text-[#1F2937]">
-            Persona Settings
-          </h1>
-          <p className="mt-1 text-muted-foreground text-sm">
-            Configure your AI agent&apos;s behavior and risk tolerance
-          </p>
+      <div className="relative">
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8 flex items-center justify-between"
+        >
+          <div>
+            <h1 className="text-2xl font-bold text-[#1F2937]">
+              Persona Settings
+            </h1>
+            <p className="mt-1 text-muted-foreground text-sm">
+              Configure your AI agent&apos;s behavior and risk tolerance
+            </p>
+          </div>
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.1 }}
+            className="flex h-12 w-12 items-center justify-center rounded-2xl bg-pastel-mint overflow-hidden border border-border/40"
+          >
+            <Image src="/Curious.png" alt="Mascot" width={40} height={40} />
+          </motion.div>
+        </motion.div>
+
+        {/* The large curious mascot standing next to the card */}
+        <div className="absolute -top-12 -right-32 hidden xl:block pointer-events-none">
+          <div className="relative">
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0, rotate: 10 }}
+              animate={{ scale: 1, opacity: 1, rotate: 0 }}
+              transition={{ delay: 0.3, type: "spring" }}
+            >
+              <Image 
+                src="/Curious.png" 
+                alt="Curious Mascot" 
+                width={200} 
+                height={200}
+                className="drop-shadow-xl"
+              />
+            </motion.div>
+            <motion.div
+              className="absolute -top-4 -right-2 text-4xl"
+              animate={{ y: [0, -10, 0] }}
+              transition={{ repeat: Infinity, duration: 2 }}
+            >
+              ❓
+            </motion.div>
+          </div>
         </div>
-        <DoodleMascot size={64} mood="happy" />
-      </motion.div>
+      </div>
 
       <div className="space-y-6">
         {/* Risk Level */}
