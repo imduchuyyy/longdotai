@@ -2,8 +2,14 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { type FormEvent, useState, useRef, useEffect, useMemo, useCallback, type ReactNode } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import {
+  type FormEvent,
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+} from "react";
+import { motion } from "framer-motion";
 import {
   Send,
   Loader2,
@@ -11,98 +17,24 @@ import {
   ExternalLink,
   ArrowLeft,
   AlertCircle,
-  TrendingUp,
-  Shield,
-  Zap,
-  Flame,
-  ArrowRightLeft,
-  CircleDot,
   Wallet,
+  ArrowRightLeft,
   ArrowUpRight,
   Copy,
   Check,
+  Droplets,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
 import { DoodleMascot, MascotIcon } from "@/components/doodle-mascot";
 import { useApp } from "@/providers/app-provider";
-import { STRATEGIES, TOKENS, XLAYER_CHAIN_INDEX, toMinimalUnits, type Strategy } from "@/lib/strategies";
-import { signAndBroadcast } from "@/lib/okx-api";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { UIMessage } from "ai";
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-type DepositStep = "idle" | "approve" | "swap" | "done";
-
-interface DepositFlowState {
-  status: "confirming" | "executing" | "completed" | "error";
-  strategyId: string;
-  amount: string;
-  /** Current step in the multi-step flow */
-  step: DepositStep;
-  /** Transaction hashes for completed steps */
-  txHashes: { approve?: string; swap?: string };
-  error?: string;
-}
-
-type WithdrawStep = "idle" | "approve" | "swap" | "done";
-
-interface WithdrawFlowState {
-  status: "confirming" | "executing" | "completed" | "error";
-  strategyId: string;
-  /** WOKB amount to swap back to USDT */
-  amount: string;
-  /** Current step in the multi-step flow */
-  step: WithdrawStep;
-  /** Transaction hashes for completed steps */
-  txHashes: { approve?: string; swap?: string };
-  error?: string;
-}
-
-interface SendFlowState {
-  status: "confirming" | "signing" | "broadcasting" | "completed" | "error";
-  tokenSymbol: string;
-  tokenAddress: string;
-  amount: string;
-  toAddress: string;
-  txHash?: string;
-  error?: string;
-}
-
-type FlowState =
-  | { type: "idle" }
-  | { type: "deposit"; flow: DepositFlowState }
-  | { type: "withdraw"; flow: WithdrawFlowState }
-  | { type: "send"; flow: SendFlowState };
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const RISK_ICONS = {
-  low: Shield,
-  medium: Zap,
-  high: Flame,
-} as const;
-
-const RISK_BADGE_VARIANTS = {
-  low: "mint" as const,
-  medium: "pastel" as const,
-  high: "peach" as const,
-};
-
-function getStrategy(id: string): Strategy | undefined {
-  return STRATEGIES.find((s) => s.id === id);
-}
-
-// ---------------------------------------------------------------------------
-// Component
+// ChatView — main exported component
 // ---------------------------------------------------------------------------
 
 export function ChatView() {
@@ -120,33 +52,40 @@ export function ChatView() {
     session,
   } = useApp();
 
+  // -----------------------------------------------------------------------
+  // Chat transport — sends session + persona + wallet info to server
+  // -----------------------------------------------------------------------
+
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
-        body: { persona, userAddress, walletAddress: userAddress },
+        body: {
+          persona,
+          userAddress,
+          walletAddress: userAddress,
+          session,
+        },
       }),
-    [persona, userAddress],
+    [persona, userAddress, session],
   );
 
-  const { messages, sendMessage, status, setMessages, addToolOutput } = useChat({
+  const { messages, sendMessage, status, setMessages } = useChat({
     transport,
   });
 
   const [input, setInput] = useState("");
-  const [flowState, setFlowState] = useState<FlowState>({ type: "idle" });
   const scrollRef = useRef<HTMLDivElement>(null);
   const conversationIdRef = useRef<string | null>(activeConversationId);
   const loadedConversationIdRef = useRef<string | null>(null);
-
-  // Track which tool calls we've already handled to prevent duplicate
-  // invocations caused by React re-renders + setTimeout race conditions.
-  const handledToolCallsRef = useRef<Set<string>>(new Set());
-
-  const isLoading = status === "streaming" || status === "submitted";
   const hasSentInitialRef = useRef(false);
 
+  const isLoading = status === "streaming" || status === "submitted";
+
+  // -----------------------------------------------------------------------
   // Auto-send initial message from home search bar
+  // -----------------------------------------------------------------------
+
   useEffect(() => {
     if (initialChatMessage && !hasSentInitialRef.current) {
       hasSentInitialRef.current = true;
@@ -155,22 +94,22 @@ export function ChatView() {
     }
   }, [initialChatMessage, sendMessage, setInitialChatMessage]);
 
-  // Reset initial message flag when conversation changes
   useEffect(() => {
     hasSentInitialRef.current = false;
   }, [activeConversationId]);
 
-  function handleBackToHome() {
-    setChatActive(false);
-    setInitialChatMessage(null);
-  }
+  // -----------------------------------------------------------------------
+  // Keep conversationIdRef in sync
+  // -----------------------------------------------------------------------
 
-  // Keep ref in sync
   useEffect(() => {
     conversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
 
+  // -----------------------------------------------------------------------
   // Load existing messages when switching to a conversation
+  // -----------------------------------------------------------------------
+
   useEffect(() => {
     if (!activeConversationId) {
       if (loadedConversationIdRef.current !== null) {
@@ -179,21 +118,15 @@ export function ChatView() {
       }
       return;
     }
-
     if (loadedConversationIdRef.current === activeConversationId) return;
     loadedConversationIdRef.current = activeConversationId;
 
     fetch(`/api/conversations/${activeConversationId}/messages`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.messages && data.messages.length > 0) {
+        if (data.messages?.length > 0) {
           const uiMessages: UIMessage[] = data.messages.map(
-            (m: {
-              id: string;
-              role: string;
-              content: string;
-              createdAt: string;
-            }) => ({
+            (m: { id: string; role: string; content: string; createdAt: string }) => ({
               id: m.id,
               role: m.role as "user" | "assistant",
               parts: [{ type: "text" as const, text: m.content }],
@@ -208,14 +141,20 @@ export function ChatView() {
       .catch(console.error);
   }, [activeConversationId, setMessages]);
 
-  // Auto-scroll
+  // -----------------------------------------------------------------------
+  // Auto-scroll on new messages
+  // -----------------------------------------------------------------------
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, flowState]);
+  }, [messages]);
 
-  // Persist messages
+  // -----------------------------------------------------------------------
+  // Persist messages to DB when AI finishes responding
+  // -----------------------------------------------------------------------
+
   const lastPersistedCountRef = useRef(0);
 
   useEffect(() => {
@@ -229,6 +168,7 @@ export function ChatView() {
     (async () => {
       let convoId = conversationIdRef.current;
 
+      // Create conversation if needed
       if (!convoId && email) {
         try {
           const res = await fetch("/api/conversations", {
@@ -255,9 +195,7 @@ export function ChatView() {
 
       for (const msg of newMessages) {
         const content = msg.parts
-          .filter(
-            (p): p is { type: "text"; text: string } => p.type === "text",
-          )
+          .filter((p): p is { type: "text"; text: string } => p.type === "text")
           .map((p) => p.text)
           .join("");
 
@@ -270,9 +208,9 @@ export function ChatView() {
             body: JSON.stringify({ role: msg.role, content }),
           });
 
+          // Set conversation title from first user message
           if (msg.role === "user" && messages.indexOf(msg) === 0) {
-            const title =
-              content.length > 50 ? content.slice(0, 47) + "..." : content;
+            const title = content.length > 50 ? content.slice(0, 47) + "..." : content;
             updateConversationTitle(convoId, title);
           }
         } catch (err) {
@@ -280,22 +218,20 @@ export function ChatView() {
         }
       }
     })();
-  }, [
-    status,
-    messages,
-    email,
-    setActiveConversationId,
-    addConversation,
-    updateConversationTitle,
-  ]);
+  }, [status, messages, email, setActiveConversationId, addConversation, updateConversationTitle]);
 
   useEffect(() => {
     lastPersistedCountRef.current = 0;
   }, [activeConversationId]);
 
-  // -------------------------------------------------------------------------
-  // Form submit
-  // -------------------------------------------------------------------------
+  // -----------------------------------------------------------------------
+  // Event handlers
+  // -----------------------------------------------------------------------
+
+  function handleBackToHome() {
+    setChatActive(false);
+    setInitialChatMessage(null);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -304,869 +240,19 @@ export function ChatView() {
     setInput("");
   }
 
-  // -------------------------------------------------------------------------
-  // Deposit flow — triggered by prepare_deposit tool call
-  // -------------------------------------------------------------------------
-
-  const handleStartDeposit = useCallback(
-    (strategyId: string, amount: string, toolCallId: string) => {
-      setFlowState({
-        type: "deposit",
-        flow: {
-          status: "confirming",
-          strategyId,
-          amount,
-          step: "idle",
-          txHashes: {},
-        },
-      });
-
-      // Provide the tool output so the AI can continue
-      addToolOutput({
-        tool: "prepare_deposit",
-        toolCallId,
-        output: {
-          status: "awaiting_confirmation",
-          strategyId,
-          amount,
-          message: `Deposit of ${amount} USDT into ${getStrategy(strategyId)?.name ?? strategyId} is ready for user confirmation.`,
-        },
-      });
-    },
-    [addToolOutput],
-  );
-
-  const executeDeposit = useCallback(async () => {
-    if (flowState.type !== "deposit" || flowState.flow.status !== "confirming") return;
-    if (!session) {
-      setFlowState({
-        type: "deposit",
-        flow: { ...flowState.flow, status: "error", error: "Not authenticated — please sign in first" },
-      });
-      return;
-    }
-
-    const { strategyId, amount } = flowState.flow;
-    const strategy = getStrategy(strategyId);
-    if (!strategy || !strategy.actionable) {
-      setFlowState({
-        type: "deposit",
-        flow: { ...flowState.flow, status: "error", error: "Strategy not actionable" },
-      });
-      return;
-    }
-
-    // Start executing
-    setFlowState({
-      type: "deposit",
-      flow: { ...flowState.flow, status: "executing", step: "approve" },
-    });
-
-    try {
-      // Step 1: Approve USDT spending for the OKX DEX router
-      // We need to get the approve transaction data from our swap proxy
-      const amountWei = toMinimalUnits(amount, TOKENS.USDT.decimals);
-
-      const approveRes = await fetch("/api/swap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "approve",
-          params: {
-            chainIndex: XLAYER_CHAIN_INDEX,
-            tokenContractAddress: TOKENS.USDT.address,
-            approveAmount: amountWei,
-          },
-        }),
-      });
-
-      if (!approveRes.ok) throw new Error("Failed to get approve transaction");
-
-      const approveData = await approveRes.json();
-      const approveTx = approveData.data?.[0];
-
-      if (approveTx?.data) {
-        // Execute the approve transaction
-        const approveResult = await signAndBroadcast({
-          session,
-          toAddr: approveTx.to || TOKENS.USDT.address,
-          value: "0",
-          contractAddr: TOKENS.USDT.address,
-          inputData: approveTx.data,
-          isContractCall: true,
-        });
-
-        setFlowState((prev) => {
-          if (prev.type !== "deposit") return prev;
-          return {
-            type: "deposit",
-            flow: {
-              ...prev.flow,
-              step: "swap",
-              txHashes: { ...prev.flow.txHashes, approve: approveResult.txHash },
-            },
-          };
-        });
-
-        // Small delay to let the approval propagate
-        await new Promise((r) => setTimeout(r, 3000));
-      } else {
-        // No approval needed (already approved or native token)
-        setFlowState((prev) => {
-          if (prev.type !== "deposit") return prev;
-          return {
-            type: "deposit",
-            flow: { ...prev.flow, step: "swap" },
-          };
-        });
-      }
-
-      // Step 2: Swap ~50% of USDT to OKB via OKX DEX
-      const swapAmount = Math.floor(Number(amount) * 50) / 100; // 50%
-      const swapAmountWei = toMinimalUnits(String(swapAmount), TOKENS.USDT.decimals);
-
-      // Get the wallet address from session
-      const walletAddr =
-        session.addresses.find((a) => a.chainIndex === XLAYER_CHAIN_INDEX)?.address ??
-        session.addresses[0]?.address;
-
-      if (!walletAddr) throw new Error("No wallet address found");
-
-      const swapRes = await fetch("/api/swap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "swap",
-          params: {
-            chainIndex: XLAYER_CHAIN_INDEX,
-            fromTokenAddress: TOKENS.USDT.address,
-            toTokenAddress: TOKENS.WOKB.address,
-            amount: swapAmountWei,
-            userWalletAddress: walletAddr,
-            swapMode: "exactIn",
-            gasLevel: "average",
-            autoSlippage: "true",
-            slippagePercent: "0.5",
-          },
-        }),
-      });
-
-      if (!swapRes.ok) throw new Error("Failed to get swap transaction");
-
-      const swapData = await swapRes.json();
-      const swapTx = swapData.data?.[0]?.tx;
-
-      if (!swapTx) throw new Error("No swap transaction data returned");
-
-      // Execute the swap transaction
-      const swapResult = await signAndBroadcast({
-        session,
-        toAddr: swapTx.to,
-        value: swapTx.value || "0",
-        contractAddr: swapTx.to,
-        inputData: swapTx.data,
-        isContractCall: true,
-      });
-
-      setFlowState({
-        type: "deposit",
-        flow: {
-          status: "completed",
-          strategyId,
-          amount,
-          step: "done",
-          txHashes: {
-            approve: flowState.flow.txHashes.approve,
-            swap: swapResult.txHash,
-          },
-        },
-      });
-
-      // Persist the strategy activation
-      if (email) {
-        try {
-          await fetch("/api/strategies", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              userAddress: email,
-              strategyId,
-              depositAmount: Number(amount),
-              txHash: swapResult.txHash,
-            }),
-          });
-        } catch (err) {
-          console.error("Failed to persist strategy:", err);
-        }
-      }
-    } catch (err) {
-      console.error("Deposit flow failed:", err);
-      setFlowState((prev) => {
-        if (prev.type !== "deposit") return prev;
-        return {
-          type: "deposit",
-          flow: {
-            ...prev.flow,
-            status: "error",
-            error: err instanceof Error ? err.message : "Transaction failed",
-          },
-        };
-      });
-    }
-  }, [flowState, session, email]);
-
-  // -------------------------------------------------------------------------
-  // Withdraw flow — triggered by prepare_withdraw tool call
-  // -------------------------------------------------------------------------
-
-  const handleStartWithdraw = useCallback(
-    (strategyId: string, amount: string, toolCallId: string) => {
-      setFlowState({
-        type: "withdraw",
-        flow: {
-          status: "confirming",
-          strategyId,
-          amount,
-          step: "idle",
-          txHashes: {},
-        },
-      });
-
-      addToolOutput({
-        tool: "prepare_withdraw",
-        toolCallId,
-        output: {
-          status: "awaiting_confirmation",
-          strategyId,
-          amount,
-          message: `Withdrawal of ${amount} WOKB from ${getStrategy(strategyId)?.name ?? strategyId} is ready. This will swap your WOKB back to USDT.`,
-        },
-      });
-    },
-    [addToolOutput],
-  );
-
-  const executeWithdraw = useCallback(async () => {
-    if (flowState.type !== "withdraw" || flowState.flow.status !== "confirming") return;
-    if (!session) {
-      setFlowState({
-        type: "withdraw",
-        flow: { ...flowState.flow, status: "error", error: "Not authenticated — please sign in first" },
-      });
-      return;
-    }
-
-    const { amount } = flowState.flow;
-
-    // Start executing
-    setFlowState({
-      type: "withdraw",
-      flow: { ...flowState.flow, status: "executing", step: "approve" },
-    });
-
-    try {
-      // Step 1: Approve WOKB spending for the OKX DEX router
-      const amountWei = toMinimalUnits(amount, TOKENS.WOKB.decimals);
-
-      const approveRes = await fetch("/api/swap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "approve",
-          params: {
-            chainIndex: XLAYER_CHAIN_INDEX,
-            tokenContractAddress: TOKENS.WOKB.address,
-            approveAmount: amountWei,
-          },
-        }),
-      });
-
-      if (!approveRes.ok) throw new Error("Failed to get approve transaction");
-
-      const approveData = await approveRes.json();
-      const approveTx = approveData.data?.[0];
-
-      if (approveTx?.data) {
-        // Execute the approve transaction
-        const approveResult = await signAndBroadcast({
-          session,
-          toAddr: approveTx.to || TOKENS.WOKB.address,
-          value: "0",
-          contractAddr: TOKENS.WOKB.address,
-          inputData: approveTx.data,
-          isContractCall: true,
-        });
-
-        setFlowState((prev) => {
-          if (prev.type !== "withdraw") return prev;
-          return {
-            type: "withdraw",
-            flow: {
-              ...prev.flow,
-              step: "swap",
-              txHashes: { ...prev.flow.txHashes, approve: approveResult.txHash },
-            },
-          };
-        });
-
-        // Small delay to let the approval propagate
-        await new Promise((r) => setTimeout(r, 3000));
-      } else {
-        // No approval needed (already approved)
-        setFlowState((prev) => {
-          if (prev.type !== "withdraw") return prev;
-          return {
-            type: "withdraw",
-            flow: { ...prev.flow, step: "swap" },
-          };
-        });
-      }
-
-      // Step 2: Swap WOKB → USDT via OKX DEX
-      const walletAddr =
-        session.addresses.find((a) => a.chainIndex === XLAYER_CHAIN_INDEX)?.address ??
-        session.addresses[0]?.address;
-
-      if (!walletAddr) throw new Error("No wallet address found");
-
-      const swapRes = await fetch("/api/swap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "swap",
-          params: {
-            chainIndex: XLAYER_CHAIN_INDEX,
-            fromTokenAddress: TOKENS.WOKB.address,
-            toTokenAddress: TOKENS.USDT.address,
-            amount: amountWei,
-            userWalletAddress: walletAddr,
-            swapMode: "exactIn",
-            gasLevel: "average",
-            autoSlippage: "true",
-            slippagePercent: "0.5",
-          },
-        }),
-      });
-
-      if (!swapRes.ok) throw new Error("Failed to get swap transaction");
-
-      const swapData = await swapRes.json();
-      const swapTx = swapData.data?.[0]?.tx;
-
-      if (!swapTx) throw new Error("No swap transaction data returned");
-
-      // Execute the swap transaction
-      const swapResult = await signAndBroadcast({
-        session,
-        toAddr: swapTx.to,
-        value: swapTx.value || "0",
-        contractAddr: swapTx.to,
-        inputData: swapTx.data,
-        isContractCall: true,
-      });
-
-      setFlowState({
-        type: "withdraw",
-        flow: {
-          status: "completed",
-          strategyId: flowState.flow.strategyId,
-          amount,
-          step: "done",
-          txHashes: {
-            approve: flowState.flow.txHashes.approve,
-            swap: swapResult.txHash,
-          },
-        },
-      });
-    } catch (err) {
-      console.error("Withdraw flow failed:", err);
-      setFlowState((prev) => {
-        if (prev.type !== "withdraw") return prev;
-        return {
-          type: "withdraw",
-          flow: {
-            ...prev.flow,
-            status: "error",
-            error: err instanceof Error ? err.message : "Transaction failed",
-          },
-        };
-      });
-    }
-  }, [flowState, session]);
-
-  // -------------------------------------------------------------------------
-  // Send token flow — triggered by send_token tool call
-  // -------------------------------------------------------------------------
-
-  const handleStartSend = useCallback(
-    (
-      tokenSymbol: string,
-      tokenAddress: string,
-      amount: string,
-      toAddress: string,
-      toolCallId: string,
-    ) => {
-      setFlowState({
-        type: "send",
-        flow: {
-          status: "confirming",
-          tokenSymbol,
-          tokenAddress,
-          amount,
-          toAddress,
-        },
-      });
-
-      addToolOutput({
-        tool: "send_token",
-        toolCallId,
-        output: {
-          status: "awaiting_confirmation",
-          tokenSymbol,
-          amount,
-          toAddress,
-          message: `Send ${amount} ${tokenSymbol} to ${toAddress} is ready for user confirmation.`,
-        },
-      });
-    },
-    [addToolOutput],
-  );
-
-  const executeSend = useCallback(async () => {
-    if (flowState.type !== "send" || flowState.flow.status !== "confirming") return;
-    if (!session) {
-      setFlowState({
-        type: "send",
-        flow: { ...flowState.flow, status: "error", error: "Not authenticated — please sign in first" },
-      });
-      return;
-    }
-
-    const { tokenSymbol, tokenAddress, amount, toAddress } = flowState.flow;
-    const isNative = !tokenAddress || tokenAddress === "" || tokenAddress === "0x0000000000000000000000000000000000000000";
-
-    setFlowState({
-      type: "send",
-      flow: { ...flowState.flow, status: "signing" },
-    });
-
-    try {
-      const result = await signAndBroadcast({
-        session,
-        toAddr: toAddress,
-        value: amount,
-        contractAddr: isNative ? undefined : tokenAddress,
-        isContractCall: false,
-        onProgress: (step) => {
-          if (step === "broadcasting") {
-            setFlowState((prev) => {
-              if (prev.type !== "send") return prev;
-              return { type: "send", flow: { ...prev.flow, status: "broadcasting" } };
-            });
-          }
-        },
-      });
-
-      setFlowState({
-        type: "send",
-        flow: {
-          ...flowState.flow,
-          status: "completed",
-          txHash: result.txHash,
-        },
-      });
-    } catch (err) {
-      console.error("Send failed:", err);
-      setFlowState((prev) => {
-        if (prev.type !== "send") return prev;
-        return {
-          type: "send",
-          flow: {
-            ...prev.flow,
-            status: "error",
-            error: err instanceof Error ? err.message : "Transaction failed",
-          },
-        };
-      });
-    }
-  }, [flowState, session]);
-
-  function handleDismissFlow() {
-    setFlowState({ type: "idle" });
-  }
-
-  // User avatar initials from email
+  // User avatar initials
   const avatarInitials = email ? email.slice(0, 2).toUpperCase() : "U";
 
-  // -------------------------------------------------------------------------
-  // Render a single message part
-  // -------------------------------------------------------------------------
+  // Deduplicate messages by id (keep last occurrence)
+  const deduped = useMemo(() => {
+    const seen = new Map<string, number>();
+    messages.forEach((m, i) => seen.set(m.id, i));
+    return messages.filter((m, i) => seen.get(m.id) === i);
+  }, [messages]);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function renderPart(part: any, msgId: string, partIndex: number, role: string) {
-    // Guard against undefined/null parts during streaming
-    if (!part || !part.type) return null;
-
-    // Text parts
-    if (part.type === "text") {
-      if (!part.text) return null;
-
-      // Render assistant text as markdown, user text as plain
-      if (role === "assistant") {
-        return (
-          <div key={`${msgId}-text-${partIndex}`} className="chat-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {part.text}
-            </ReactMarkdown>
-          </div>
-        );
-      }
-
-      return (
-        <p key={`${msgId}-text-${partIndex}`} className="whitespace-pre-wrap">
-          {part.text}
-        </p>
-      );
-    }
-
-    // Normalize: AI SDK v6 may send tool parts as "dynamic-tool" with toolName
-    // instead of "tool-{name}" when useChat isn't typed with tool definitions
-    const toolType = part.type === "dynamic-tool"
-      ? `tool-${part.toolName}`
-      : part.type;
-
-    // Guard: tool parts must have a state property; skip if missing
-    if (typeof toolType === "string" && toolType.startsWith("tool-") && !part.state) {
-      return null;
-    }
-
-    // Tool parts — strategy recommendation (server-executed, has output)
-    if (toolType === "tool-recommend_strategy") {
-      if (part.state === "output-available" && part.output && !part.output.error) {
-        const s = part.output.strategy;
-        const RiskIcon = RISK_ICONS[s.risk as keyof typeof RISK_ICONS] ?? Shield;
-        const badgeVariant = RISK_BADGE_VARIANTS[s.risk as keyof typeof RISK_BADGE_VARIANTS] ?? "pastel";
-
-        return (
-          <motion.div
-            key={`${msgId}-strategy-${partIndex}`}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="my-3 w-full"
-          >
-            <div className="card-playful px-5 py-4">
-              <div className="flex items-center justify-between mb-2">
-                <Badge variant={badgeVariant}>
-                  <RiskIcon className="mr-1 h-3 w-3" />
-                  {s.riskLabel}
-                </Badge>
-                <span className="text-xs text-muted-foreground font-medium">
-                  TVL {s.tvl}
-                </span>
-              </div>
-              <h4 className="text-base font-bold text-[#1F2937] mb-1">
-                {s.name}
-              </h4>
-              <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
-                {s.description}
-              </p>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1 rounded-xl bg-pastel-mint px-2.5 py-1">
-                    <TrendingUp className="h-3.5 w-3.5 text-[#059669]" />
-                    <span className="text-base font-bold text-[#059669]">
-                      {s.apy}%
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">APY</span>
-                </div>
-                {s.actionable && (
-                  <span className="text-xs text-muted-foreground rounded-lg bg-[#F1F5F9] px-2 py-0.5">
-                    Min: {s.minDeposit} {s.token}
-                  </span>
-                )}
-              </div>
-              {part.output.reason && (
-                <p className="mt-2 text-xs text-muted-foreground italic">
-                  {part.output.reason}
-                </p>
-              )}
-            </div>
-          </motion.div>
-        );
-      }
-
-      // Loading state
-      if (part.state === "input-available" || part.state === "input-streaming") {
-        return (
-          <div key={`${msgId}-strategy-loading-${partIndex}`} className="my-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Looking up strategy...
-          </div>
-        );
-      }
-
-      return null;
-    }
-
-    // Tool parts — prepare_deposit (client-side, no execute on server)
-    if (toolType === "tool-prepare_deposit") {
-      if (part.state === "input-available") {
-        const { strategyId, amount } = part.input;
-        const strategy = getStrategy(strategyId);
-
-        // Guard: only handle each tool call once (ref is synchronous, avoids race)
-        if (!handledToolCallsRef.current.has(part.toolCallId)) {
-          handledToolCallsRef.current.add(part.toolCallId);
-          setTimeout(() => handleStartDeposit(strategyId, amount, part.toolCallId), 0);
-        }
-
-        return (
-          <motion.div
-            key={`${msgId}-deposit-${partIndex}`}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="my-3 w-full"
-          >
-            <div className="card-playful px-5 py-4 border-l-4 border-l-primary">
-              <div className="flex items-center gap-2 mb-2">
-                <ArrowRightLeft className="h-4 w-4 text-primary" />
-                <span className="text-sm font-semibold text-[#1F2937]">
-                  Deposit Ready
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {amount} USDT into {strategy?.name ?? strategyId}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Steps: Approve USDT → Swap 50% to OKB → Add Liquidity
-              </p>
-            </div>
-          </motion.div>
-        );
-      }
-
-      // After output is provided
-      if (part.state === "output-available") {
-        return null; // The flow overlay handles the UI
-      }
-
-      if (part.state === "input-streaming") {
-        return (
-          <div key={`${msgId}-deposit-loading-${partIndex}`} className="my-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Preparing deposit...
-          </div>
-        );
-      }
-
-      return null;
-    }
-
-    // Tool parts — prepare_withdraw (client-side)
-    if (toolType === "tool-prepare_withdraw") {
-      if (part.state === "input-available") {
-        const { strategyId, amount } = part.input;
-        const strategy = getStrategy(strategyId);
-
-        // Guard: only handle each tool call once (ref is synchronous, avoids race)
-        if (!handledToolCallsRef.current.has(part.toolCallId)) {
-          handledToolCallsRef.current.add(part.toolCallId);
-          setTimeout(() => handleStartWithdraw(strategyId, amount, part.toolCallId), 0);
-        }
-
-        return (
-          <motion.div
-            key={`${msgId}-withdraw-${partIndex}`}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="my-3 w-full"
-          >
-            <div className="card-playful px-5 py-4 border-l-4 border-l-amber-400">
-              <div className="flex items-center gap-2 mb-2">
-                <ArrowRightLeft className="h-4 w-4 text-amber-600" />
-                <span className="text-sm font-semibold text-[#1F2937]">
-                  Withdrawal Ready
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {amount} WOKB from {strategy?.name ?? strategyId}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Steps: Approve WOKB → Swap WOKB to USDT
-              </p>
-            </div>
-          </motion.div>
-        );
-      }
-
-      if (part.state === "output-available") return null;
-
-      if (part.state === "input-streaming") {
-        return (
-          <div key={`${msgId}-withdraw-loading-${partIndex}`} className="my-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Preparing withdrawal...
-          </div>
-        );
-      }
-
-      return null;
-    }
-
-    // Tool parts — send_token (client-side)
-    if (toolType === "tool-send_token") {
-      if (part.state === "input-available") {
-        const { tokenSymbol, tokenAddress, amount, toAddress } = part.input;
-
-        // Guard: only handle each tool call once (ref is synchronous, avoids race)
-        if (!handledToolCallsRef.current.has(part.toolCallId)) {
-          handledToolCallsRef.current.add(part.toolCallId);
-          setTimeout(
-            () =>
-              handleStartSend(tokenSymbol, tokenAddress, amount, toAddress, part.toolCallId),
-            0,
-          );
-        }
-
-        return (
-          <motion.div
-            key={`${msgId}-send-${partIndex}`}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="my-3 w-full"
-          >
-            <div className="card-playful px-5 py-4 border-l-4 border-l-[#6366F1]">
-              <div className="flex items-center gap-2 mb-2">
-                <ArrowUpRight className="h-4 w-4 text-[#6366F1]" />
-                <span className="text-sm font-semibold text-[#1F2937]">
-                  Send Ready
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {amount} {tokenSymbol} to{" "}
-                <span className="font-mono">{toAddress.slice(0, 8)}...{toAddress.slice(-6)}</span>
-              </p>
-            </div>
-          </motion.div>
-        );
-      }
-
-      if (part.state === "output-available") return null;
-
-      if (part.state === "input-streaming") {
-        return (
-          <div key={`${msgId}-send-loading-${partIndex}`} className="my-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Preparing transfer...
-          </div>
-        );
-      }
-
-      return null;
-    }
-
-    // Tool parts — get_balances (server-executed)
-    if (toolType === "tool-get_balances") {
-      if (part.state === "output-available" && part.output && !part.output.error) {
-        const { balances } = part.output;
-        if (!balances || balances.length === 0) {
-          return (
-            <div key={`${msgId}-balances-empty-${partIndex}`} className="my-2 text-xs text-muted-foreground">
-              No token balances found.
-            </div>
-          );
-        }
-
-        return (
-          <motion.div
-            key={`${msgId}-balances-${partIndex}`}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="my-2 w-full"
-          >
-            <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
-              <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-2">
-                <Wallet className="h-3.5 w-3.5 text-primary" />
-                Your Balances
-              </div>
-              <div className="space-y-1.5">
-                {balances.map((b: { symbol: string; balance: string; usdValue: string }, idx: number) => (
-                  <div key={idx} className="flex items-center justify-between text-xs">
-                    <span className="font-medium text-[#1F2937]">{b.symbol}</span>
-                    <div className="text-right">
-                      <span className="text-[#1F2937]">{parseFloat(b.balance).toFixed(4)}</span>
-                      {parseFloat(b.usdValue) > 0 && (
-                        <span className="text-muted-foreground ml-1.5">(${b.usdValue})</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </motion.div>
-        );
-      }
-
-      if (part.state === "input-available" || part.state === "input-streaming") {
-        return (
-          <div key={`${msgId}-balances-loading-${partIndex}`} className="my-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Checking balances...
-          </div>
-        );
-      }
-
-      return null;
-    }
-
-    // Tool parts — get_swap_quote (server-executed)
-    if (toolType === "tool-get_swap_quote") {
-      if (part.state === "output-available" && part.output && !part.output.error) {
-        const q = part.output;
-        return (
-          <motion.div
-            key={`${msgId}-quote-${partIndex}`}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="my-2 w-full"
-          >
-            <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
-              <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937]">
-                <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
-                Swap Quote
-              </div>
-              <p className="text-sm text-[#1F2937] mt-1 font-medium">
-                {q.fromAmount} {q.fromToken} → {q.toAmount} {q.toToken}
-              </p>
-            </div>
-          </motion.div>
-        );
-      }
-
-      if (part.state === "input-available" || part.state === "input-streaming") {
-        return (
-          <div key={`${msgId}-quote-loading-${partIndex}`} className="my-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Fetching swap quote...
-          </div>
-        );
-      }
-
-      return null;
-    }
-
-    // Step start parts
-    if (part.type === "step-start") {
-      return null; // Don't render step boundaries visually
-    }
-
-    return null;
-  }
-
-  // -------------------------------------------------------------------------
+  // -----------------------------------------------------------------------
   // Render
-  // -------------------------------------------------------------------------
+  // -----------------------------------------------------------------------
 
   return (
     <div className="flex h-full flex-col">
@@ -1184,6 +270,7 @@ export function ChatView() {
       {/* Messages Area */}
       <ScrollArea className="flex-1 px-8 py-6" ref={scrollRef}>
         <div className="mx-auto max-w-2xl space-y-5">
+          {/* Empty state */}
           {messages.length === 0 && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
@@ -1203,183 +290,19 @@ export function ChatView() {
             </motion.div>
           )}
 
-          {/* Deduplicate messages by id — AI SDK v6 can temporarily
-              produce two entries with the same id (e.g. during tool-output
-              resubmission). Keep the last occurrence which has the most
-              complete data. */}
-          {(() => {
-            const seen = new Map<string, number>();
-            messages.forEach((m, i) => seen.set(m.id, i));
-            return messages.filter((m, i) => seen.get(m.id) === i);
-          })().map((message) => {
-            // Guard: skip messages without parts array
-            if (!message.parts || !Array.isArray(message.parts)) return null;
-
-            // Skip rendering assistant messages with no visible content
-            // (happens during submitted/streaming state before text arrives)
-            const hasVisibleContent =
-              message.role === "user" ||
-              message.parts.some((p: any) => {
-                if (!p || !p.type) return false;
-                if (p.type === "text" && p.text) return true;
-                // Check for tool parts with renderable states
-                const tType = p.type === "dynamic-tool" ? `tool-${p.toolName}` : p.type;
-                if (typeof tType === "string" && tType.startsWith("tool-") && p.state) return true;
-                return false;
-              });
-
-            if (!hasVisibleContent) return null;
-
-            return (
-            <motion.div
+          {/* Message list */}
+          {deduped.map((message) => (
+            <MessageBubble
               key={message.id}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-              className={cn(
-                "flex gap-3",
-                message.role === "user" ? "justify-end" : "justify-start",
-              )}
-            >
-              {message.role === "assistant" && (
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
-                  <MascotIcon size={20} />
-                </div>
-              )}
-              <div
-                className={cn(
-                  "max-w-[75%] rounded-3xl px-5 py-3 text-sm leading-relaxed",
-                  message.role === "user"
-                    ? "bg-primary text-white rounded-br-lg"
-                    : "bg-white border border-border/60 text-[#1F2937] rounded-bl-lg shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
-                )}
-              >
-                {message.parts.map((part: any, i: number) => renderPart(part, message.id, i, message.role))}
-              </div>
-              {message.role === "user" && (
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-blue">
-                  <span className="text-xs font-bold text-[#3730A3]">
-                    {avatarInitials}
-                  </span>
-                </div>
-              )}
-            </motion.div>
-            );
-          })}
+              message={message}
+              avatarInitials={avatarInitials}
+            />
+          ))}
 
-          {/* AI Thinking Indicator */}
-          {isLoading && messages.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center gap-3"
-            >
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
-                <MascotIcon size={20} />
-              </div>
-              <div className="flex items-center gap-2 rounded-3xl rounded-bl-lg border border-border/60 bg-white px-5 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
-                <div className="flex gap-1.5">
-                  <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:0ms]" />
-                  <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:150ms]" />
-                  <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:300ms]" />
-                </div>
-              </div>
-            </motion.div>
-          )}
+          {/* Thinking indicator */}
+          {isLoading && messages.length > 0 && <ThinkingIndicator />}
         </div>
       </ScrollArea>
-
-      {/* Transaction Flow Overlay */}
-      <AnimatePresence>
-        {flowState.type === "deposit" && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            className="mx-8 mb-4"
-          >
-            <div className="card-playful px-6 py-4">
-              <div className="mx-auto max-w-2xl">
-                <DepositFlowUI
-                  flow={flowState.flow}
-                  onConfirm={executeDeposit}
-                  onDismiss={handleDismissFlow}
-                  onRetry={() => {
-                    setFlowState({
-                      type: "deposit",
-                      flow: {
-                        ...flowState.flow,
-                        status: "confirming",
-                        step: "idle",
-                        error: undefined,
-                      },
-                    });
-                  }}
-                />
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {flowState.type === "withdraw" && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            className="mx-8 mb-4"
-          >
-            <div className="card-playful px-6 py-4">
-              <div className="mx-auto max-w-2xl">
-                <WithdrawFlowUI
-                  flow={flowState.flow}
-                  onConfirm={executeWithdraw}
-                  onDismiss={handleDismissFlow}
-                  onRetry={() => {
-                    setFlowState({
-                      type: "withdraw",
-                      flow: {
-                        ...flowState.flow,
-                        status: "confirming",
-                        step: "idle",
-                        error: undefined,
-                      },
-                    });
-                  }}
-                />
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {flowState.type === "send" && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            className="mx-8 mb-4"
-          >
-            <div className="card-playful px-6 py-4">
-              <div className="mx-auto max-w-2xl">
-                <SendFlowUI
-                  flow={flowState.flow}
-                  onConfirm={executeSend}
-                  onDismiss={handleDismissFlow}
-                  onRetry={() => {
-                    setFlowState({
-                      type: "send",
-                      flow: {
-                        ...flowState.flow,
-                        status: "confirming",
-                        error: undefined,
-                      },
-                    });
-                  }}
-                />
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Input Area */}
       <div className="px-8 pb-6 pt-2">
@@ -1412,544 +335,431 @@ export function ChatView() {
 }
 
 // ---------------------------------------------------------------------------
-// Deposit Flow UI Sub-component
+// MessageBubble — renders a single message (user or assistant)
 // ---------------------------------------------------------------------------
 
-function DepositFlowUI({
-  flow,
-  onConfirm,
-  onDismiss,
-  onRetry,
+function MessageBubble({
+  message,
+  avatarInitials,
 }: {
-  flow: DepositFlowState;
-  onConfirm: () => void;
-  onDismiss: () => void;
-  onRetry: () => void;
+  message: UIMessage;
+  avatarInitials: string;
 }) {
-  const strategy = getStrategy(flow.strategyId);
-  const name = strategy?.name ?? flow.strategyId;
+  if (!message.parts || !Array.isArray(message.parts)) return null;
 
-  if (flow.status === "confirming") {
-    return (
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-semibold text-[#1F2937]">
-            Deposit {flow.amount} USDT into {name}?
-          </p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            This will: Approve USDT → Swap 50% to OKB → Enter LP position
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onDismiss}>
-            Cancel
-          </Button>
-          <Button size="sm" variant="mint" onClick={onConfirm}>
-            Confirm Deposit
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  // Check if the message has any visible content
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasVisible = message.role === "user" || message.parts.some((p: any) => {
+    if (!p?.type) return false;
+    if (p.type === "text" && p.text) return true;
+    // Tool parts (either "tool-xxx" or "dynamic-tool")
+    const tType = p.type === "dynamic-tool" ? `tool-${p.toolName}` : p.type;
+    if (typeof tType === "string" && tType.startsWith("tool-") && p.state) return true;
+    return false;
+  });
 
-  if (flow.status === "executing") {
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center gap-3">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          <p className="text-sm font-semibold text-[#1F2937]">
-            Executing deposit...
-          </p>
-        </div>
-        <div className="flex gap-4">
-          <StepIndicator
-            label="Approve"
-            active={flow.step === "approve"}
-            done={flow.step !== "approve" && flow.step !== "idle"}
-            txHash={flow.txHashes.approve}
-          />
-          <StepIndicator
-            label="Swap USDT→OKB"
-            active={flow.step === "swap"}
-            done={flow.step === "done"}
-            txHash={flow.txHashes.swap}
-          />
-          <StepIndicator
-            label="Add LP"
-            active={false}
-            done={flow.step === "done"}
-          />
-        </div>
-      </div>
-    );
-  }
+  if (!hasVisible) return null;
 
-  if (flow.status === "completed") {
-    return (
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-pastel-mint">
-            <CheckCircle2 className="h-5 w-5 text-[#059669]" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[#1F2937]">
-              Deposit Completed!
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {flow.amount} USDT deposited into {name}
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          {flow.txHashes.swap && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() =>
-                window.open(
-                  `https://www.okx.com/explorer/xlayer/tx/${flow.txHashes.swap}`,
-                  "_blank",
-                )
-              }
-            >
-              <ExternalLink className="h-3 w-3" />
-              View Tx
-            </Button>
-          )}
-          <Button size="sm" onClick={onDismiss}>
-            Done
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (flow.status === "error") {
-    return (
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50">
-            <AlertCircle className="h-5 w-5 text-destructive" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[#1F2937]">
-              Deposit Failed
-            </p>
-            <p className="text-xs text-muted-foreground max-w-xs truncate">
-              {flow.error}
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onDismiss}>
-            Cancel
-          </Button>
-          <Button size="sm" onClick={onRetry}>
-            Retry
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Withdraw Flow UI Sub-component (strategy exit — WOKB → USDT swap)
-// ---------------------------------------------------------------------------
-
-function WithdrawFlowUI({
-  flow,
-  onConfirm,
-  onDismiss,
-  onRetry,
-}: {
-  flow: WithdrawFlowState;
-  onConfirm: () => void;
-  onDismiss: () => void;
-  onRetry: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const strategy = getStrategy(flow.strategyId);
-  const name = strategy?.name ?? flow.strategyId;
-
-  function copyTxHash() {
-    const hash = flow.txHashes.swap || flow.txHashes.approve;
-    if (hash) {
-      navigator.clipboard.writeText(hash);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  }
-
-  // --- Confirming ---
-  if (flow.status === "confirming") {
-    return (
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-pastel-lavender">
-            <ArrowRightLeft className="h-5 w-5 text-[#7C3AED]" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[#1F2937]">
-              Withdraw {flow.amount} WOKB?
-            </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Swap WOKB → USDT from {name}
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onDismiss}>
-            Cancel
-          </Button>
-          <Button size="sm" onClick={onConfirm}>
-            Confirm Withdraw
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  // --- Executing (multi-step) ---
-  if (flow.status === "executing") {
-    const approving = flow.step === "approve";
-    const swapping = flow.step === "swap";
-    const approveDone = !!flow.txHashes.approve || swapping;
-
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center gap-3 mb-1">
-          <Loader2 className="h-5 w-5 animate-spin text-[#7C3AED]" />
-          <div>
-            <p className="text-sm font-semibold text-[#1F2937]">
-              Withdrawing {flow.amount} WOKB...
-            </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {name}
-            </p>
-          </div>
-        </div>
-        <StepIndicator
-          label="Approve WOKB for DEX router"
-          active={approving}
-          done={approveDone}
-          txHash={flow.txHashes.approve}
-        />
-        <StepIndicator
-          label="Swap WOKB → USDT"
-          active={swapping}
-          done={false}
-          txHash={undefined}
-        />
-      </div>
-    );
-  }
-
-  // --- Completed ---
-  if (flow.status === "completed") {
-    const txHash = flow.txHashes.swap || flow.txHashes.approve || "";
-    return (
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-pastel-mint">
-            <CheckCircle2 className="h-5 w-5 text-[#059669]" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[#1F2937]">
-              Withdrawal Complete!
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {flow.amount} WOKB swapped to USDT
-            </p>
-            {txHash && (
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-[10px] font-mono text-muted-foreground">
-                  {txHash.slice(0, 12)}...{txHash.slice(-8)}
-                </span>
-                <button
-                  onClick={copyTxHash}
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {copied ? <Check className="h-3 w-3 text-[#059669]" /> : <Copy className="h-3 w-3" />}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="flex gap-2">
-          {txHash && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() =>
-                window.open(
-                  `https://www.okx.com/explorer/xlayer/tx/${txHash}`,
-                  "_blank",
-                )
-              }
-            >
-              <ExternalLink className="h-3 w-3" />
-              Explorer
-            </Button>
-          )}
-          <Button size="sm" onClick={onDismiss}>
-            Done
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  // --- Error ---
-  if (flow.status === "error") {
-    return (
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50">
-            <AlertCircle className="h-5 w-5 text-destructive" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[#1F2937]">
-              Withdrawal Failed
-            </p>
-            <p className="text-xs text-muted-foreground max-w-xs truncate">
-              {flow.error}
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onDismiss}>
-            Cancel
-          </Button>
-          <Button size="sm" onClick={onRetry}>
-            Retry
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Send Flow UI Sub-component
-// ---------------------------------------------------------------------------
-
-function SendFlowUI({
-  flow,
-  onConfirm,
-  onDismiss,
-  onRetry,
-}: {
-  flow: SendFlowState;
-  onConfirm: () => void;
-  onDismiss: () => void;
-  onRetry: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-
-  function copyTxHash() {
-    if (flow.txHash) {
-      navigator.clipboard.writeText(flow.txHash);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  }
-
-  const shortAddr = `${flow.toAddress.slice(0, 8)}...${flow.toAddress.slice(-6)}`;
-
-  if (flow.status === "confirming") {
-    return (
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-pastel-blue">
-            <ArrowUpRight className="h-5 w-5 text-[#4338CA]" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[#1F2937]">
-              Send {flow.amount} {flow.tokenSymbol}?
-            </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              To <span className="font-mono">{shortAddr}</span>
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onDismiss}>
-            Cancel
-          </Button>
-          <Button size="sm" onClick={onConfirm}>
-            Confirm Send
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (flow.status === "signing" || flow.status === "broadcasting") {
-    return (
-      <div className="flex items-center gap-4">
-        <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        <div>
-          <p className="text-sm font-semibold text-[#1F2937]">
-            {flow.status === "signing" ? "Signing transaction..." : "Broadcasting transaction..."}
-          </p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Sending {flow.amount} {flow.tokenSymbol} to <span className="font-mono">{shortAddr}</span>
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (flow.status === "completed") {
-    return (
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-pastel-mint">
-            <CheckCircle2 className="h-5 w-5 text-[#059669]" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[#1F2937]">
-              Transfer Sent!
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {flow.amount} {flow.tokenSymbol} sent to <span className="font-mono">{shortAddr}</span>
-            </p>
-            {flow.txHash && (
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-[10px] font-mono text-muted-foreground">
-                  {flow.txHash.slice(0, 12)}...{flow.txHash.slice(-8)}
-                </span>
-                <button
-                  onClick={copyTxHash}
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {copied ? <Check className="h-3 w-3 text-[#059669]" /> : <Copy className="h-3 w-3" />}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="flex gap-2">
-          {flow.txHash && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() =>
-                window.open(
-                  `https://www.okx.com/explorer/xlayer/tx/${flow.txHash}`,
-                  "_blank",
-                )
-              }
-            >
-              <ExternalLink className="h-3 w-3" />
-              Explorer
-            </Button>
-          )}
-          <Button size="sm" onClick={onDismiss}>
-            Done
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (flow.status === "error") {
-    return (
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50">
-            <AlertCircle className="h-5 w-5 text-destructive" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[#1F2937]">
-              Transfer Failed
-            </p>
-            <p className="text-xs text-muted-foreground max-w-xs truncate">
-              {flow.error}
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onDismiss}>
-            Cancel
-          </Button>
-          <Button size="sm" onClick={onRetry}>
-            Retry
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Step Indicator
-// ---------------------------------------------------------------------------
-
-function StepIndicator({
-  label,
-  active,
-  done,
-  txHash,
-}: {
-  label: string;
-  active: boolean;
-  done: boolean;
-  txHash?: string;
-}) {
   return (
-    <div className="flex items-center gap-2">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25 }}
+      className={cn(
+        "flex gap-3",
+        message.role === "user" ? "justify-end" : "justify-start",
+      )}
+    >
+      {message.role === "assistant" && (
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
+          <MascotIcon size={20} />
+        </div>
+      )}
       <div
         className={cn(
-          "flex h-6 w-6 items-center justify-center rounded-full transition-colors",
-          done
-            ? "bg-pastel-mint"
-            : active
-              ? "bg-primary/10"
-              : "bg-gray-100",
+          "max-w-[75%] rounded-3xl px-5 py-3 text-sm leading-relaxed",
+          message.role === "user"
+            ? "bg-primary text-white rounded-br-lg"
+            : "bg-white border border-border/60 text-[#1F2937] rounded-bl-lg shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
         )}
       >
-        {done ? (
-          <CheckCircle2 className="h-3.5 w-3.5 text-[#059669]" />
-        ) : active ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-        ) : (
-          <CircleDot className="h-3.5 w-3.5 text-gray-300" />
-        )}
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+        {message.parts.map((part: any, i: number) => (
+          <MessagePart
+            key={`${message.id}-${i}`}
+            part={part}
+            role={message.role}
+          />
+        ))}
       </div>
-      <div>
-        <p
-          className={cn(
-            "text-xs font-medium",
-            done ? "text-[#059669]" : active ? "text-[#1F2937]" : "text-gray-400",
-          )}
-        >
-          {label}
-        </p>
-        {txHash && (
-          <button
-            className="text-[10px] text-primary hover:underline"
-            onClick={() =>
-              window.open(
-                `https://www.okx.com/explorer/xlayer/tx/${txHash}`,
-                "_blank",
-              )
-            }
-          >
-            {txHash.slice(0, 8)}...
-          </button>
-        )}
-      </div>
+      {message.role === "user" && (
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-blue">
+          <span className="text-xs font-bold text-[#3730A3]">{avatarInitials}</span>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MessagePart — renders a single part within a message
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function MessagePart({ part, role }: { part: any; role: string }) {
+  if (!part?.type) return null;
+
+  // --- Text ---
+  if (part.type === "text") {
+    if (!part.text) return null;
+    if (role === "assistant") {
+      return (
+        <div className="chat-markdown">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.text}</ReactMarkdown>
+        </div>
+      );
+    }
+    return <p className="whitespace-pre-wrap">{part.text}</p>;
+  }
+
+  // --- Step start (invisible boundary) ---
+  if (part.type === "step-start") return null;
+
+  // --- Tool parts ---
+  // Normalize dynamic-tool → tool-{name}
+  const toolType =
+    part.type === "dynamic-tool" ? `tool-${part.toolName}` : part.type;
+
+  if (typeof toolType !== "string" || !toolType.startsWith("tool-")) return null;
+
+  // Loading states
+  if (part.state === "input-streaming" || part.state === "input-available") {
+    return <ToolLoading toolType={toolType} />;
+  }
+
+  // Error from tool output
+  if (part.state === "output-available" && part.output?.error) {
+    return <ToolError message={part.output.message || "Something went wrong."} />;
+  }
+
+  // Output cards for each tool
+  if (part.state === "output-available" && part.output) {
+    switch (toolType) {
+      case "tool-get_balances":
+        return <BalancesCard output={part.output} />;
+      case "tool-swap_token":
+        return <SwapCard output={part.output} />;
+      case "tool-add_liquidity":
+        return <LiquidityCard output={part.output} action="add" />;
+      case "tool-remove_liquidity":
+        return <LiquidityCard output={part.output} action="remove" />;
+      case "tool-withdraw_to_address":
+        return <TransferCard output={part.output} />;
+      default:
+        return null;
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Tool loading indicator
+// ---------------------------------------------------------------------------
+
+function ToolLoading({ toolType }: { toolType: string }) {
+  const labels: Record<string, string> = {
+    "tool-get_balances": "Checking balances...",
+    "tool-swap_token": "Executing swap...",
+    "tool-add_liquidity": "Adding liquidity...",
+    "tool-remove_liquidity": "Removing liquidity...",
+    "tool-withdraw_to_address": "Sending transfer...",
+  };
+  return (
+    <div className="my-2 flex items-center gap-2 text-xs text-muted-foreground">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      {labels[toolType] ?? "Working..."}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tool error card
+// ---------------------------------------------------------------------------
+
+function ToolError({ message }: { message: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="my-2 w-full"
+    >
+      <div className="flex items-center gap-2.5 rounded-2xl bg-red-50 px-4 py-3">
+        <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
+        <p className="text-xs text-destructive">{message}</p>
+      </div>
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Balances card
+// ---------------------------------------------------------------------------
+
+function BalancesCard({
+  output,
+}: {
+  output: {
+    balances: { symbol: string; balance: string; usdValue: string }[];
+    lpPositions?: { tokenId: string; liquidity: string }[];
+  };
+}) {
+  const { balances, lpPositions } = output;
+
+  if (!balances || balances.length === 0) {
+    return (
+      <div className="my-2 text-xs text-muted-foreground">
+        No token balances found.
+      </div>
+    );
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="my-2 w-full"
+    >
+      <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-2">
+          <Wallet className="h-3.5 w-3.5 text-primary" />
+          Your Balances
+        </div>
+        <div className="space-y-1.5">
+          {balances.map((b, idx) => (
+            <div key={idx} className="flex items-center justify-between text-xs">
+              <span className="font-medium text-[#1F2937]">{b.symbol}</span>
+              <div className="text-right">
+                <span className="text-[#1F2937]">
+                  {parseFloat(b.balance).toFixed(4)}
+                </span>
+                {parseFloat(b.usdValue) > 0 && (
+                  <span className="text-muted-foreground ml-1.5">
+                    (${parseFloat(b.usdValue).toFixed(2)})
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {lpPositions && lpPositions.length > 0 && (
+          <div className="mt-3 pt-2 border-t border-border/40">
+            <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-1">
+              <Droplets className="h-3.5 w-3.5 text-primary" />
+              LP Positions
+            </div>
+            {lpPositions.map((lp) => (
+              <div key={lp.tokenId} className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">#{lp.tokenId}</span>
+                <span className="font-mono text-[#1F2937]">
+                  {BigInt(lp.liquidity) > 0n ? "Active" : "Empty"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Swap card
+// ---------------------------------------------------------------------------
+
+function SwapCard({
+  output,
+}: {
+  output: {
+    fromToken: string;
+    toToken: string;
+    amountIn: string;
+    expectedOut: string;
+    txHash: string;
+    explorerUrl: string;
+  };
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="my-2 w-full"
+    >
+      <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-2">
+          <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
+          Swap Complete
+        </div>
+        <p className="text-sm font-medium text-[#1F2937]">
+          {output.amountIn} {output.fromToken} → {output.expectedOut} {output.toToken}
+        </p>
+        <TxHashLink txHash={output.txHash} explorerUrl={output.explorerUrl} />
+      </div>
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Liquidity card (add or remove)
+// ---------------------------------------------------------------------------
+
+function LiquidityCard({
+  output,
+  action,
+}: {
+  output: {
+    pool?: string;
+    amountUSDT?: string;
+    amountWOKB?: string;
+    tokenId?: string;
+    percentRemoved?: number;
+    txHash?: string;
+    collectTxHash?: string;
+    explorerUrl: string;
+  };
+  action: "add" | "remove";
+}) {
+  const isAdd = action === "add";
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="my-2 w-full"
+    >
+      <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-2">
+          <Droplets className="h-3.5 w-3.5 text-primary" />
+          {isAdd ? "Liquidity Added" : "Liquidity Removed"}
+        </div>
+        {isAdd ? (
+          <p className="text-sm font-medium text-[#1F2937]">
+            {output.amountUSDT} USDT + {output.amountWOKB} WOKB → {output.pool ?? "USDT/WOKB"} pool
+          </p>
+        ) : (
+          <p className="text-sm font-medium text-[#1F2937]">
+            Position #{output.tokenId} — {output.percentRemoved ?? 100}% removed
+          </p>
+        )}
+        <TxHashLink
+          txHash={output.txHash || output.collectTxHash || ""}
+          explorerUrl={output.explorerUrl}
+        />
+      </div>
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Transfer (withdraw) card
+// ---------------------------------------------------------------------------
+
+function TransferCard({
+  output,
+}: {
+  output: {
+    token: string;
+    amount: string;
+    toAddress: string;
+    txHash: string;
+    explorerUrl: string;
+  };
+}) {
+  const short = `${output.toAddress.slice(0, 8)}...${output.toAddress.slice(-6)}`;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="my-2 w-full"
+    >
+      <div className="rounded-2xl bg-[#F1F5F9] px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-[#1F2937] mb-2">
+          <ArrowUpRight className="h-3.5 w-3.5 text-primary" />
+          Transfer Sent
+        </div>
+        <p className="text-sm font-medium text-[#1F2937]">
+          {output.amount} {output.token} → <span className="font-mono">{short}</span>
+        </p>
+        <TxHashLink txHash={output.txHash} explorerUrl={output.explorerUrl} />
+      </div>
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tx hash link (reusable)
+// ---------------------------------------------------------------------------
+
+function TxHashLink({ txHash, explorerUrl }: { txHash: string; explorerUrl: string }) {
+  const [copied, setCopied] = useState(false);
+
+  if (!txHash) return null;
+
+  function copyHash() {
+    navigator.clipboard.writeText(txHash);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div className="flex items-center gap-2 mt-2">
+      <span className="text-[10px] font-mono text-muted-foreground">
+        {txHash.slice(0, 12)}...{txHash.slice(-8)}
+      </span>
+      <button
+        onClick={copyHash}
+        className="text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {copied ? (
+          <Check className="h-3 w-3 text-[#059669]" />
+        ) : (
+          <Copy className="h-3 w-3" />
+        )}
+      </button>
+      <a
+        href={explorerUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-1 text-[10px] text-primary hover:underline"
+      >
+        <ExternalLink className="h-3 w-3" />
+        Explorer
+      </a>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Thinking indicator
+// ---------------------------------------------------------------------------
+
+function ThinkingIndicator() {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="flex items-center gap-3"
+    >
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-pastel-mint">
+        <MascotIcon size={20} />
+      </div>
+      <div className="flex items-center gap-2 rounded-3xl rounded-bl-lg border border-border/60 bg-white px-5 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+        <div className="flex gap-1.5">
+          <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:0ms]" />
+          <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:150ms]" />
+          <span className="h-2 w-2 animate-bounce rounded-full bg-primary/40 [animation-delay:300ms]" />
+        </div>
+      </div>
+    </motion.div>
   );
 }

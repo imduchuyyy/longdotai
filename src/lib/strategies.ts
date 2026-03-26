@@ -59,6 +59,16 @@ export interface Strategy {
   poolTokens?: { tokenA: TokenSymbol; tokenB: TokenSymbol };
   /** Whether this strategy supports automated deposit through chat */
   actionable: boolean;
+  /** OKX DeFi API investment ID (for actionable strategies) */
+  investmentId?: string;
+  /**
+   * Token addresses as used by the OKX DeFi API for this product.
+   * Native tokens use 0xeee...eee. These may differ from the DEX API addresses.
+   */
+  defiTokens?: {
+    tokenA: { address: string; symbol: string };
+    tokenB: { address: string; symbol: string };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -68,21 +78,32 @@ export interface Strategy {
 export const STRATEGIES: Strategy[] = [
   {
     id: "uniswap-v3-usdt-wokb",
-    name: "Uniswap V3 USDT/WOKB",
+    name: "Uniswap V3 USDT/OKB",
     protocol: "Uniswap V3",
     description:
-      "Provide liquidity to the USDT/WOKB pair on Uniswap V3 on X Layer. " +
-      "Earn trading fees from the most active OKB pair. " +
-      "To enter this position, a portion of your USDT is swapped to OKB via the OKX DEX aggregator.",
-    apy: 24.5,
+      "Provide liquidity to the USDT/OKB pair on Uniswap V3 on X Layer. " +
+      "Earn trading fees from the most active OKB pair (~9.7% APY). " +
+      "Deposit is handled via the OKX DeFi API which manages the LP position for you.",
+    apy: 9.76,
     risk: "medium",
     riskLabel: "Balanced",
-    tvl: "$2.1M",
+    tvl: "$2.3M",
     minDeposit: 5,
     token: "USDT",
     poolAddress: "0x63d62734847E55A266FCa4219A9aD0a02D5F6e02",
     poolTokens: { tokenA: "USDT", tokenB: "WOKB" },
     actionable: true,
+    investmentId: "42003",
+    defiTokens: {
+      tokenA: {
+        address: "0x779ded0c9e1022225f8e0630b35a9b54be713736",
+        symbol: "USDT",
+      },
+      tokenB: {
+        address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        symbol: "OKB",
+      },
+    },
   },
   {
     id: "okb-staking",
