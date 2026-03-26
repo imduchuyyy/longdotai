@@ -149,7 +149,7 @@ export function EmailLogin({ onSuccess }: EmailLoginProps) {
             >
               <div className="text-center mb-4">
                 <h3 className="text-lg font-bold text-[#1F2937]">
-                  Sign in to Long.AI
+                  Sign in to SusuOnX
                 </h3>
                 <p className="text-sm text-muted-foreground mt-1">
                   Enter your email to get started

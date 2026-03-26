@@ -81,7 +81,7 @@ export async function POST(req: Request) {
   const riskLevel = persona?.riskLevel ?? 50;
   const riskLabel = getRiskLabel(riskLevel);
 
-  const systemPrompt = `You are Long.AI, a DeFi AI agent on X Layer blockchain (OKX Layer 2).
+  const systemPrompt = `You are SusuOnX, a DeFi AI agent on X Layer blockchain (OKX Layer 2).
 
 USER PROFILE:
 - Risk tolerance: ${riskLabel} (${riskLevel}/100)

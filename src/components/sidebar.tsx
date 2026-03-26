@@ -110,9 +110,9 @@ export function Sidebar() {
                   onClick={() => handleNavClick("/")}
                   className="flex items-center gap-2.5"
                 >
-                  <Image src="/avatar.png" alt="Long.AI" width={30} height={30} className="rounded-full" />
+                  <Image src="/avatar.png" alt="SusuOnX" width={30} height={30} className="rounded-full" />
                   <span className="text-lg font-bold text-[#1F2937] tracking-tight">
-                    Long.AI
+                    SusuOnX
                   </span>
                 </button>
                 <Button

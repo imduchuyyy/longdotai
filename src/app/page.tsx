@@ -62,9 +62,9 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
         <div className="flex items-center gap-2.5">
-          <Image src="/avatar.png" alt="Long.AI" width={32} height={32} className="rounded-full" />
+          <Image src="/avatar.png" alt="SusuOnX" width={32} height={32} className="rounded-full" />
           <span className="text-lg font-bold text-[#1F2937] tracking-tight">
-            Long.AI
+            SusuOnX
           </span>
         </div>
         <Link href="/dashboard">
@@ -237,9 +237,9 @@ export default function LandingPage() {
       <footer className="border-t border-border/40 py-8">
         <div className="mx-auto max-w-6xl px-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Image src="/avatar.png" alt="Long.AI" width={20} height={20} className="rounded-full" />
+            <Image src="/avatar.png" alt="SusuOnX" width={20} height={20} className="rounded-full" />
             <span className="text-sm font-semibold text-[#1F2937]">
-              Long.AI
+              SusuOnX
             </span>
           </div>
           <p className="text-xs text-muted-foreground">

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Friendly 2D hand-drawn doodle mascot for Long.AI
+ * Friendly 2D hand-drawn doodle mascot for SusuOnX
  * A cute blob-like character with a clover/leaf motif
  */
 
